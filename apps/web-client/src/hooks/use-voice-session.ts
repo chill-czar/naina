@@ -52,6 +52,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const pendingStateRef = useRef<AgentState | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
   const leftoverPlaybackByteRef = useRef<Uint8Array | null>(null);
   const isMutedRef = useRef(isMuted);
@@ -136,6 +137,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
       } catch {}
     }
     activeSourcesRef.current = [];
+    pendingStateRef.current = null;
     leftoverPlaybackByteRef.current = null;
     if (playbackContextRef.current) {
       nextPlayTimeRef.current = playbackContextRef.current.currentTime;
@@ -239,6 +241,10 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
 
       sourceNode.onended = () => {
         activeSourcesRef.current = activeSourcesRef.current.filter((s) => s !== sourceNode);
+        if (activeSourcesRef.current.length === 0 && pendingStateRef.current) {
+          setAgentState(pendingStateRef.current);
+          pendingStateRef.current = null;
+        }
       };
     } catch (err) {
       console.error('Error playing audio chunk:', err);
@@ -332,7 +338,12 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
           try {
             const data = JSON.parse(event.data);
             if (data.type === 'state') {
-              setAgentState(data.state);
+              if (data.state === 'LISTENING' && activeSourcesRef.current.length > 0) {
+                pendingStateRef.current = 'LISTENING';
+              } else {
+                pendingStateRef.current = null;
+                setAgentState(data.state);
+              }
             } else if (data.type === 'barge_in') {
               stopAllPlayback();
               setAgentState('LISTENING');
@@ -389,6 +400,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
             console.error('Failed to parse WS text message:', e);
           }
         } else if (event.data instanceof ArrayBuffer) {
+          setAgentState('SPEAKING');
           queueAudioChunk(event.data);
         }
       };

@@ -6,7 +6,7 @@ import { VoiceOrb } from '../components/voice-orb';
 import { Captions } from '../components/captions';
 import { TranscriptDrawer } from '../components/transcript-drawer';
 import { DebugOverlay } from '../components/debug-overlay';
-import { MessageSquare, FileText, Send, X } from 'lucide-react';
+import { MessageSquare, FileText, Send, X, PhoneOff } from 'lucide-react';
 
 export default function Home() {
   const {
@@ -74,10 +74,6 @@ export default function Home() {
       <header className="relative z-10 w-full pt-10 px-8 flex items-center justify-between pointer-events-none">
         <div className="w-6" />
 
-        <h1 className="font-serif text-[28px] tracking-[0.02em] text-[#1e1b2b]">
-          Naina
-        </h1>
-
         <div className="flex items-center justify-end w-6">
           <div
             title={
@@ -98,23 +94,24 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="flex-1 flex flex-col items-center justify-center -mt-6">
-        <VoiceOrb
-          state={agentState}
-          isConnected={isConnected}
-          isConnecting={isConnecting}
-          audioLevel={audioLevel}
-          onOrbClick={handleOrbClick}
-          onEndCall={endCall}
-        />
-
-        <div className="mt-4">
-          <Captions
+      <main className="flex-1 relative flex items-center justify-center -mt-6">
+        <div className="relative flex flex-col items-center">
+          <VoiceOrb
             state={agentState}
             isConnected={isConnected}
             isConnecting={isConnecting}
-            transcripts={transcripts}
+            audioLevel={audioLevel}
+            onOrbClick={handleOrbClick}
           />
+
+          <div className="absolute top-full mt-5 left-1/2 -translate-x-1/2 w-[min(90vw,640px)] pointer-events-none">
+            <Captions
+              state={agentState}
+              isConnected={isConnected}
+              isConnecting={isConnecting}
+              transcripts={transcripts}
+            />
+          </div>
         </div>
       </main>
 
@@ -123,39 +120,67 @@ export default function Home() {
 
         <div className="flex-1 max-w-2xl flex flex-col items-center justify-center">
           {showTypeInput ? (
-            <form
-              onSubmit={handleInputSubmit}
-              className="w-full max-w-md flex items-center bg-white/90 backdrop-blur-md border border-[#e2def0] rounded-full px-4 py-2 shadow-sm focus-within:border-[#bebee5] focus-within:shadow-md transition-all animate-in fade-in slide-in-from-bottom-2 duration-200"
-            >
-              <input
-                type="text"
-                autoFocus
-                value={typedMessage}
-                onChange={(e) => setTypedMessage(e.target.value)}
-                placeholder="Type a message to Naina..."
-                className="flex-1 bg-transparent text-sm text-[#1e1b2b] placeholder-[#8a8699] focus:outline-none px-1"
-              />
-              <button
-                type="submit"
-                disabled={!typedMessage.trim()}
-                aria-label="Send message"
-                className="p-1 rounded-full text-[#8a8699] hover:text-[#1e1b2b] disabled:opacity-30 transition-colors cursor-pointer"
+            <div className="w-full max-w-md flex flex-col items-center gap-3 animate-in fade-in slide-in-from-bottom-2 duration-200">
+              <form
+                onSubmit={handleInputSubmit}
+                className="w-full flex items-center bg-white/95 backdrop-blur-md border border-[#e2def0] rounded-full px-4 py-2 shadow-sm focus-within:border-[#bebee5] focus-within:shadow-md transition-all"
               >
-                <Send className="w-3.5 h-3.5" />
-              </button>
+                <input
+                  type="text"
+                  autoFocus
+                  value={typedMessage}
+                  onChange={(e) => setTypedMessage(e.target.value)}
+                  placeholder="Type a message to Naina..."
+                  className="flex-1 bg-transparent text-sm text-[#1e1b2b] placeholder-[#8a8699] focus:outline-none px-1"
+                />
+                <button
+                  type="submit"
+                  disabled={!typedMessage.trim()}
+                  aria-label="Send message"
+                  className="p-1 rounded-full text-[#8a8699] hover:text-[#1e1b2b] disabled:opacity-30 transition-colors cursor-pointer"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowTypeInput(false)}
+                  aria-label="Close text input"
+                  className="ml-1 p-1 rounded-full text-[#8a8699] hover:text-[#1e1b2b] transition-colors cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </form>
+
+              {isConnected && (
+                <button
+                  type="button"
+                  onClick={endCall}
+                  className="group inline-flex items-center gap-2 px-5 py-2 rounded-full bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-medium text-xs shadow-md shadow-red-600/30 active:scale-95 transition-all duration-200 cursor-pointer"
+                  title="End call"
+                  aria-label="End call"
+                >
+                  <PhoneOff className="w-3.5 h-3.5 transition-transform group-hover:scale-110" />
+                  <span>End call</span>
+                </button>
+              )}
+            </div>
+          ) : isConnected ? (
+            <div className="flex flex-col items-center animate-in fade-in zoom-in-95 duration-200">
               <button
                 type="button"
-                onClick={() => setShowTypeInput(false)}
-                aria-label="Close text input"
-                className="ml-1 p-1 rounded-full text-[#8a8699] hover:text-[#1e1b2b] transition-colors cursor-pointer"
+                onClick={endCall}
+                className="group relative inline-flex items-center gap-2.5 px-6 py-2.5 rounded-full bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-medium text-sm shadow-[0_8px_22px_-2px_rgba(220,38,38,0.42)] hover:shadow-[0_10px_26px_-2px_rgba(220,38,38,0.52)] active:scale-95 transition-all duration-200 cursor-pointer"
+                title="End call"
+                aria-label="End call"
               >
-                <X className="w-3.5 h-3.5" />
+                <PhoneOff className="w-4 h-4 transition-transform group-hover:scale-110" />
+                <span className="tracking-wide">End call</span>
               </button>
-            </form>
+            </div>
           ) : (
             <div
               className={`flex flex-wrap items-center justify-center gap-x-6 gap-y-2 transition-all duration-500 ${
-                !isConnected && !isConnecting
+                !isConnecting
                   ? 'opacity-100'
                   : 'opacity-0 pointer-events-none'
               }`}

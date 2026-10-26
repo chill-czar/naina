@@ -35,7 +35,7 @@ export function TranscriptDrawer({ isOpen, onClose, messages }: TranscriptDrawer
         }`}
       >
         <div className="flex items-center justify-between px-6 py-5 border-b border-[#e2def0]/80 bg-white/40">
-          <h3 className="font-serif italic text-xl text-[#1e1b2b]">Conversation</h3>
+          <h3 className="text-base font-semibold text-[#1e1b2b] tracking-tight">Conversation</h3>
           <button
             onClick={onClose}
             aria-label="Close transcript drawer"
@@ -47,7 +47,7 @@ export function TranscriptDrawer({ isOpen, onClose, messages }: TranscriptDrawer
 
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto px-6 py-6 space-y-6 scroll-smooth"
+          className="flex-1 overflow-y-auto px-6 py-6 space-y-6 scroll-smooth custom-scrollbar"
         >
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center p-6 text-[#8a8699]">

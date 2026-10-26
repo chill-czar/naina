@@ -12,8 +12,7 @@
   --color-bg: var(--bg);
   --color-ink: var(--ink);
   --color-muted: var(--muted);
-  --font-serif: var(--font-instrument-serif, 'Instrument Serif', Georgia, serif);
-  --font-sans: var(--font-inter, 'Inter', system-ui, -apple-system, sans-serif);
+  --font-sans: var(--font-inter, 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
 }
 
 * {
@@ -28,11 +27,7 @@ html, body {
   overflow: hidden;
   background-color: var(--bg);
   color: var(--ink);
-  font-family: var(--font-inter, 'Inter', system-ui, -apple-system, sans-serif);
-}
-
-.font-serif {
-  font-family: var(--font-instrument-serif, 'Instrument Serif', Georgia, serif);
+  font-family: var(--font-inter, 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
 }
 
 /* Background ambient glows */
@@ -43,17 +38,64 @@ html, body {
     radial-gradient(50% 40% at 50% 110%, rgba(190, 180, 235, 0.35) 0%, transparent 70%);
 }
 
-/* Custom subtle scrollbar for transcript drawer */
-::-webkit-scrollbar {
+/* Custom subtle scrollbar scoped strictly to transcript drawer */
+.custom-scrollbar::-webkit-scrollbar {
   width: 4px;
 }
-::-webkit-scrollbar-track {
+.custom-scrollbar::-webkit-scrollbar-track {
   background: transparent;
 }
-::-webkit-scrollbar-thumb {
+.custom-scrollbar::-webkit-scrollbar-thumb {
   background: rgba(138, 134, 153, 0.2);
   border-radius: 4px;
 }
-::-webkit-scrollbar-thumb:hover {
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: rgba(138, 134, 153, 0.4);
+}
+
+/* Never show horizontal scrollbars anywhere in the app */
+*::-webkit-scrollbar:horizontal {
+  display: none !important;
+  height: 0 !important;
+  width: 0 !important;
+}
+
+/* Hide scrollbar utility for Chrome, Safari, Opera, Edge, Firefox */
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+.no-scrollbar {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+
+/* Streaming Caption Animations */
+@keyframes wordIn {
+  0% {
+    opacity: 0;
+    transform: translateY(4px) scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-word-in {
+  animation: wordIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes fadeIn {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.25s ease-out forwards;
 }

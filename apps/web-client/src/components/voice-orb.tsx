@@ -1,24 +1,16 @@
 'use client';
 
-import React, { useRef, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { AgentState } from '@naina/shared-types';
+import { Orb } from 'orb-ui';
 
-interface VoiceOrbProps {
+export interface VoiceOrbProps {
   state: AgentState;
   isConnected: boolean;
   isConnecting: boolean;
   audioLevel: number;
   onOrbClick: () => void;
-  onEndCall?: () => void;
 }
-
-const BLOBS: [string, number, number, number, number, number][] = [
-  ['170,184,255', 0.45, 0.35, 0.17, 0, 0.85],
-  ['255,196,214', 0.5, 0.4, 0.21, 2.1, 0.8],
-  ['186,238,222', 0.4, 0.5, 0.14, 4.2, 0.75],
-  ['255,220,186', 0.45, 0.4, 0.19, 1.2, 0.7],
-  ['206,190,255', 0.35, 0.35, 0.23, 5.3, 0.65],
-];
 
 export function VoiceOrb({
   state,
@@ -26,179 +18,145 @@ export function VoiceOrb({
   isConnecting,
   audioLevel,
   onOrbClick,
-  onEndCall,
 }: VoiceOrbProps) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const propsRef = useRef({ state, isConnecting, audioLevel });
+  const orbRef = useRef<HTMLDivElement | null>(null);
+  const faceRef = useRef<HTMLDivElement | null>(null);
+  const leftEyeRef = useRef<HTMLDivElement | null>(null);
+  const rightEyeRef = useRef<HTMLDivElement | null>(null);
+  const haloRef = useRef<HTMLDivElement | null>(null);
+
+  const pointerTarget = useRef({ x: 0, y: 0 });
+
+  const stateRef = useRef({ state, audioLevel, isConnected });
+  useEffect(() => {
+    stateRef.current = { state, audioLevel, isConnected };
+  }, [state, audioLevel, isConnected]);
+
+  // Dynamic animated volume signal for lively voice response
+  const [liveVolume, setLiveVolume] = useState({ input: 0, output: 0 });
 
   useEffect(() => {
-    propsRef.current = { state, isConnecting, audioLevel };
-  }, [state, isConnecting, audioLevel]);
+    let animId: number;
+    let t = 0;
 
-  const ampRef = useRef(0.03);
-  const phaseRef = useRef(0);
-  const animIdRef = useRef<number | null>(null);
+    const updateVolume = () => {
+      t += 0.15;
+      const { state: curState, audioLevel: curLevel } = stateRef.current;
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    let width = 0;
-    let height = 0;
-    let baseR = 0;
-
-    const updateSize = () => {
-      const rect = canvas.getBoundingClientRect();
-      width = Math.round(rect.width) || Math.round(window.innerWidth * 0.532);
-      height = Math.round(rect.height) || Math.round(window.innerHeight * 0.57);
-      baseR = Math.min(window.innerWidth, window.innerHeight) * 0.19;
-
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = Math.round(width * dpr);
-      canvas.height = Math.round(height * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-
-    updateSize();
-    window.addEventListener('resize', updateSize);
-
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const startTime = performance.now();
-
-    const render = (now: number) => {
-      const elapsed = reduceMotion ? 0 : (now - startTime) / 1000;
-      const t = elapsed;
-      const { state: curState, isConnecting: curIsConnecting, audioLevel: curAudioLevel } = propsRef.current;
-
-      let targetAmp = 0.03;
       if (curState === 'SPEAKING') {
-        const voiceCadence = 0.2 + 0.25 * Math.abs(Math.sin(t * 2.4) * Math.sin(t * 1.1 + 0.8));
-        targetAmp = 0.25 + (curAudioLevel > 0.05 ? curAudioLevel * 0.6 : voiceCadence);
+        const syllableRhythm = 0.35 * Math.abs(Math.sin(t * 1.8) * Math.sin(t * 0.9 + 0.5));
+        const boosted = curLevel > 0.02
+          ? Math.min(1.0, 0.35 + curLevel * 3.5)
+          : 0.45 + syllableRhythm;
+        setLiveVolume({ input: 0, output: boosted });
       } else if (curState === 'LISTENING') {
-        const listenCadence = 0.08 + 0.08 * Math.sin(t * 1.3) * Math.sin(t * 0.7);
-        targetAmp = 0.12 + (curAudioLevel > 0.05 ? curAudioLevel * 0.5 : listenCadence);
-      } else if (curState === 'THINKING' || curIsConnecting) {
-        targetAmp = 0.09 + 0.04 * Math.sin(t * 2.0);
+        const boosted = curLevel > 0.02 ? Math.min(1.0, 0.3 + curLevel * 4.0) : 0.18;
+        setLiveVolume({ input: boosted, output: 0 });
       } else {
-        targetAmp = 0.03 + 0.012 * Math.sin(t * 0.8);
+        setLiveVolume({ input: 0, output: 0 });
       }
 
-      ampRef.current += (targetAmp - ampRef.current) * 0.03;
-      const amp = ampRef.current;
-      phaseRef.current += 0.004 + amp * 0.01;
-      const phase = phaseRef.current;
+      animId = requestAnimationFrame(updateVolume);
+    };
 
-      const cx = width / 2;
-      const cy = height / 2 - 14;
-      const R = baseR * (1 + 0.012 * Math.sin(t * 0.8) + amp * 0.05);
+    animId = requestAnimationFrame(updateVolume);
+    return () => cancelAnimationFrame(animId);
+  }, []);
 
-      ctx.clearRect(0, 0, width, height);
+  // Track cursor position for gaze following in IDLE / THINKING
+  useEffect(() => {
+    const onPointerMove = (e: PointerEvent) => {
+      const orbEl = orbRef.current;
+      if (!orbEl) return;
+      const rect = orbEl.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const dx = (e.clientX - centerX) / (window.innerWidth / 2);
+      const dy = (e.clientY - centerY) / (window.innerHeight / 2);
+      pointerTarget.current.x = Math.max(-1, Math.min(1, dx));
+      pointerTarget.current.y = Math.max(-1, Math.min(1, dy));
+    };
 
-      const shY = cy + R * 1.42;
-      const sh = ctx.createRadialGradient(cx, shY, 0, cx, shY, R * 1.1);
-      sh.addColorStop(0, `rgba(120, 105, 190, ${0.2 + amp * 0.08})`);
-      sh.addColorStop(1, 'rgba(120, 105, 190, 0)');
+    window.addEventListener('pointermove', onPointerMove, { passive: true });
+    return () => window.removeEventListener('pointermove', onPointerMove);
+  }, []);
 
-      ctx.save();
-      ctx.translate(cx, shY);
-      ctx.scale(1.6, 0.16);
-      ctx.translate(-cx, -shY);
-      ctx.fillStyle = sh;
-      ctx.beginPath();
-      ctx.arc(cx, shY, R * 1.1, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
+  // Natural blinking
+  useEffect(() => {
+    let timeoutId: ReturnType<typeof setTimeout>;
+    let isBlinking = false;
 
-      for (let h = 0; h < 4; h++) {
-        const p = (t * 0.12 + h / 4) % 1;
-        const rr = R * (1.08 + p * (0.8 + amp * 0.8));
-        ctx.beginPath();
-        ctx.arc(cx, cy, rr, 0, Math.PI * 2);
-        ctx.lineWidth = 1;
-        ctx.strokeStyle = `rgba(140, 125, 205, ${(1 - p) * (0.14 + amp * 0.16)})`;
-        ctx.stroke();
-      }
+    const scheduleBlink = () => {
+      const delay = (state === 'LISTENING' ? 4000 : 2800) + Math.random() * 2000;
+      timeoutId = setTimeout(() => {
+        if (!isBlinking && leftEyeRef.current && rightEyeRef.current) {
+          isBlinking = true;
+          leftEyeRef.current.style.transform = 'scaleY(0.08)';
+          rightEyeRef.current.style.transform = 'scaleY(0.08)';
 
-      const buildOrbPath = (radius: number) => {
-        ctx.beginPath();
-        for (let j = 0; j <= 120; j++) {
-          const a = (j / 120) * Math.PI * 2;
-          const wobble =
-            Math.sin(a * 3 + t * 0.9) * 0.006 * (1 + amp * 6) +
-            Math.sin(a * 2 - t * 0.6) * 0.005 * (1 + amp * 6);
-          const r = radius * (1 + wobble);
-          const x = cx + Math.cos(a) * r;
-          const y = cy + Math.sin(a) * r;
-          if (j === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
+          setTimeout(() => {
+            if (leftEyeRef.current && rightEyeRef.current) {
+              const eyeScaleY = state === 'LISTENING' ? '1.12' : state === 'THINKING' ? '0.92' : '1.0';
+              leftEyeRef.current.style.transform = `scaleY(${eyeScaleY})`;
+              rightEyeRef.current.style.transform = `scaleY(${eyeScaleY})`;
+            }
+            isBlinking = false;
+            scheduleBlink();
+          }, 130);
+        } else {
+          scheduleBlink();
         }
-        ctx.closePath();
-      };
-
-      ctx.save();
-      buildOrbPath(R);
-      ctx.clip();
-
-      const baseGrad = ctx.createLinearGradient(cx - R, cy - R, cx + R, cy + R);
-      baseGrad.addColorStop(0, '#ffffff');
-      baseGrad.addColorStop(1, '#e9e3fa');
-      ctx.fillStyle = baseGrad;
-      ctx.fillRect(cx - R * 1.5, cy - R * 1.5, R * 3, R * 3);
-
-      for (let i = 0; i < BLOBS.length; i++) {
-        const [rgb, ox, oy, speed, bPhase, bSize] = BLOBS[i];
-        const sp = speed * (1 + amp * 1.4);
-        const bx = cx + Math.cos(t * sp + bPhase + phase) * R * ox;
-        const by = cy + Math.sin(t * sp * 1.3 + bPhase) * R * oy;
-        const br = R * bSize * (1 + amp * 0.25);
-
-        const blobGrad = ctx.createRadialGradient(bx, by, 0, bx, by, br);
-        blobGrad.addColorStop(0, `rgba(${rgb}, 0.92)`);
-        blobGrad.addColorStop(1, `rgba(${rgb}, 0)`);
-        ctx.fillStyle = blobGrad;
-        ctx.fillRect(cx - R * 1.5, cy - R * 1.5, R * 3, R * 3);
-      }
-
-      const hx = cx - R * 0.38;
-      const hy = cy - R * 0.5;
-      const hlGrad = ctx.createRadialGradient(hx, hy, 0, hx, hy, R * 0.8);
-      hlGrad.addColorStop(0, 'rgba(255, 255, 255, 0.95)');
-      hlGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
-      ctx.fillStyle = hlGrad;
-      ctx.fillRect(cx - R * 1.5, cy - R * 1.5, R * 3, R * 3);
-
-      const sy = cy + R * 0.2;
-      const shadeGrad = ctx.createRadialGradient(cx, sy, R * 0.5, cx, sy, R * 1.05);
-      shadeGrad.addColorStop(0, 'rgba(120, 105, 190, 0)');
-      shadeGrad.addColorStop(1, 'rgba(120, 105, 190, 0.26)');
-      ctx.fillStyle = shadeGrad;
-      ctx.fillRect(cx - R * 1.5, cy - R * 1.5, R * 3, R * 3);
-
-      ctx.restore();
-
-      buildOrbPath(R);
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-      ctx.stroke();
-
-      buildOrbPath(R * 1.012);
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = 'rgba(140, 125, 205, 0.18)';
-      ctx.stroke();
-
-      if (!reduceMotion) {
-        animIdRef.current = requestAnimationFrame(render);
-      }
+      }, delay);
     };
 
-    animIdRef.current = requestAnimationFrame(render);
+    scheduleBlink();
+    return () => clearTimeout(timeoutId);
+  }, [state]);
 
-    return () => {
-      window.removeEventListener('resize', updateSize);
-      if (animIdRef.current) cancelAnimationFrame(animIdRef.current);
+  // Gaze tracking: direct eye contact during conversation vs cursor following during idle
+  useEffect(() => {
+    let animId: number;
+    let currentGazeX = 0;
+    let currentGazeY = 0;
+
+    const tick = () => {
+      const { state: curState, audioLevel: curLevel } = stateRef.current;
+
+      const isSpeakingOrListening = curState === 'SPEAKING' || curState === 'LISTENING';
+      let targetGazeX = 0;
+      let targetGazeY = 0;
+
+      if (!isSpeakingOrListening) {
+        const maxTravel = 26;
+        targetGazeX = pointerTarget.current.x * maxTravel;
+        targetGazeY = pointerTarget.current.y * maxTravel;
+
+        if (curState === 'THINKING' && Math.abs(pointerTarget.current.x) < 0.1 && Math.abs(pointerTarget.current.y) < 0.1) {
+          targetGazeX = 6;
+          targetGazeY = -8;
+        }
+      } else {
+        targetGazeX = 0;
+        targetGazeY = 0;
+      }
+
+      currentGazeX += (targetGazeX - currentGazeX) * 0.14;
+      currentGazeY += (targetGazeY - currentGazeY) * 0.14;
+
+      if (faceRef.current) {
+        faceRef.current.style.transform = `translate3d(${currentGazeX.toFixed(2)}px, ${currentGazeY.toFixed(2)}px, 0)`;
+      }
+
+      if (haloRef.current && curState === 'LISTENING') {
+        const pulse = 1.0 + Math.min(0.35, curLevel * 1.5);
+        haloRef.current.style.transform = `scale(${pulse})`;
+      }
+
+      animId = requestAnimationFrame(tick);
     };
+
+    animId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(animId);
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -208,42 +166,144 @@ export function VoiceOrb({
     }
   };
 
-  const getAriaLabel = () => {
-    if (!isConnected) return 'Start call with Naina';
-    if (state === 'SPEAKING') return 'Naina is speaking. Press to interrupt';
-    if (state === 'LISTENING') return 'Naina is listening';
-    if (state === 'THINKING') return 'Naina is thinking';
-    return 'Voice orb';
-  };
+
+
+  const orbUiState: 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' = isConnecting
+    ? 'connecting'
+    : state === 'LISTENING'
+    ? 'listening'
+    : state === 'THINKING'
+    ? 'thinking'
+    : state === 'SPEAKING'
+    ? 'speaking'
+    : 'idle';
 
   return (
     <div className="relative flex flex-col items-center justify-center select-none">
+      {/* Interactive Custom Orb */}
       <div
+        ref={orbRef}
         role="button"
         tabIndex={0}
         onClick={onOrbClick}
         onKeyDown={handleKeyDown}
-        aria-label={getAriaLabel()}
-        className="relative cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[#bebee5] rounded-full transition-transform active:scale-[0.98]"
-        style={{ width: '53.2vmin', height: '57vmin' }}
+        aria-label={
+          !isConnected
+            ? 'Touch Naina to talk'
+            : state === 'SPEAKING'
+            ? 'Naina is speaking. Tap to interrupt'
+            : `Naina is ${state.toLowerCase()}`
+        }
+        className="relative cursor-pointer outline-none focus-visible:ring-4 focus-visible:ring-[#7C5CFF]/30 rounded-full transition-transform active:scale-[0.98] flex items-center justify-center"
+        style={{
+          width: 'clamp(260px, 38vmin, 340px)',
+          height: 'clamp(260px, 38vmin, 340px)',
+        }}
       >
-        <canvas
-          ref={canvasRef}
-          className="block pointer-events-none w-full h-full"
+        {/* Stage Glow Halo */}
+        <div
+          ref={haloRef}
+          className={`absolute inset-[-10%] rounded-full blur-2xl pointer-events-none transition-all duration-700 ${
+            state === 'SPEAKING'
+              ? 'bg-[#7C5CFF]/40 scale-105'
+              : state === 'LISTENING'
+              ? 'bg-emerald-400/40 scale-105'
+              : state === 'THINKING' || isConnecting
+              ? 'bg-violet-400/35 animate-pulse scale-100'
+              : 'bg-[#7C5CFF]/25 scale-95'
+          }`}
         />
+
+        {/* Custom Purple Orb Character Body */}
+        <div
+          className="relative w-full h-full rounded-full overflow-hidden shadow-2xl flex items-center justify-center transition-transform duration-300"
+          style={{
+            backgroundColor: '#7C5CFF',
+            boxShadow: '0 20px 48px -10px rgba(124, 92, 255, 0.45)',
+          }}
+        >
+          {/* Face: Exact reference eyes + orb-ui Bars Mouth */}
+          <div
+            ref={faceRef}
+            className="absolute inset-0 pointer-events-none will-change-transform"
+          >
+            {/* Left Eye: Exact proportions from reference image */}
+            <div
+              ref={leftEyeRef}
+              className="absolute rounded-full bg-[#FFFFFF] shadow-[0_2px_8px_rgba(0,0,0,0.12)] transition-transform duration-100 origin-center"
+              style={{
+                width: '5.8%',
+                height: '20%',
+                left: '30.1%',
+                top: '35.5%',
+              }}
+            />
+
+            {/* Right Eye: Exact proportions from reference image */}
+            <div
+              ref={rightEyeRef}
+              className="absolute rounded-full bg-[#FFFFFF] shadow-[0_2px_8px_rgba(0,0,0,0.12)] transition-transform duration-100 origin-center"
+              style={{
+                width: '5.8%',
+                height: '20%',
+                right: '30.1%',
+                top: '35.5%',
+              }}
+            />
+
+            {/* Speaking Mouth: orb-ui Bars UI centered below the eyes */}
+            <div
+              className="absolute left-1/2 -translate-x-1/2 flex items-center justify-center overflow-visible"
+              style={{
+                top: '64%',
+                width: '32%',
+                height: '16%',
+              }}
+            >
+              <Orb
+                theme={{
+                  name: 'bars',
+                  appearance: {
+                    colors: {
+                      idle: '#FFFFFF',
+                      speaking: '#FFFFFF',
+                      listening: '#FFFFFF',
+                      thinking: '#FFFFFF',
+                      connecting: '#FFFFFF',
+                      error: '#FFFFFF',
+                    },
+                  },
+                  geometry: {
+                    barWidthRatio: 0.055,
+                    gapRatio: 0.035,
+                    minHeightRatio: 0.07,
+                    maxHeightRatio: 0.38,
+                    borderRadiusRatio: 0.035,
+                  },
+                  motion: {
+                    responseExponent: 0.6,
+                    activityRiseMs: 40,
+                    activityFallMs: 80,
+                    waveFrequency: 1.6,
+                    speakingTempo: 1.4,
+                    listeningTempo: 0.8,
+                    loadingTempo: 0.7,
+                  },
+                }}
+                signal={{
+                  state: orbUiState,
+                  inputVolume: liveVolume.input,
+                  outputVolume: liveVolume.output,
+                }}
+                size={110}
+                interactive={false}
+                aria-hidden="true"
+              />
+            </div>
+          </div>
+        </div>
       </div>
 
-      {isConnected && onEndCall && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onEndCall();
-          }}
-          className="mt-1 text-xs text-[#8a8699] hover:text-[#1e1b2b] underline decoration-[#bebee5] underline-offset-4 transition-colors cursor-pointer"
-        >
-          End call
-        </button>
-      )}
     </div>
   );
 }
