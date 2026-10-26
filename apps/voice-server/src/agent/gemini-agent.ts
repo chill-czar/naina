@@ -4,14 +4,11 @@ import {
   checkAvailability,
   createReservation,
   getReservationByReference,
-  cancelReservation,
   getFolioByRoomNumber,
 } from '@naina/hotel-pms-core';
 
-// 1. Initialize the official Google Gen AI SDK
 const ai = new GoogleGenAI({ apiKey: config.gemini.apiKey });
 
-// 2. Define the Spoken Persona & Voice Prompt Rules
 export const NAINA_SYSTEM_INSTRUCTION = `
 You are "Naina", the warm, professional, and efficient virtual front-desk concierge for The Grand Naina Luxury Hotel & Residences.
 
@@ -25,7 +22,6 @@ CRITICAL VOICE & SPEECH GUIDELINES:
 7. Check-in is at 3:00 PM, and Check-out is at 11:00 AM.
 `;
 
-// 3. Declare Hotel Tools (Function Declarations for Gemini)
 const checkAvailabilityTool: FunctionDeclaration = {
   name: 'checkAvailability',
   description: 'Check available room types, pricing, and counts for specific dates.',
@@ -103,9 +99,8 @@ const getFolioTool: FunctionDeclaration = {
   },
 };
 
-// 4. Tool Execution Dispatcher
 async function executeTool(name: string, args: Record<string, any>): Promise<any> {
-  console.log(`🛠️ [Tool Call] Executing ${name} with args:`, JSON.stringify(args));
+  console.log('[tool]', name, args);
   switch (name) {
     case 'checkAvailability':
       return await checkAvailability(args as any);
@@ -120,7 +115,6 @@ async function executeTool(name: string, args: Record<string, any>): Promise<any
   }
 }
 
-// 5. Naina Agent Session Class
 export class NainaAgent {
   private chatSession: any;
 
@@ -135,14 +129,9 @@ export class NainaAgent {
     });
   }
 
-  /**
-   * Process a user turn, automatically resolving any tool calls against PostgreSQL
-   * and returning the final spoken text for Cartesia TTS.
-   */
   async processUserMessage(userTranscript: string): Promise<string> {
     let response = await this.chatSession.sendMessage({ message: userTranscript });
 
-    // Handle Function Calling Loop
     while (response.functionCalls && response.functionCalls.length > 0) {
       const functionResponses = [];
       for (const call of response.functionCalls) {
@@ -155,7 +144,6 @@ export class NainaAgent {
         });
       }
 
-      // Return tool execution results back to Gemini wrapped in { message: ... }
       response = await this.chatSession.sendMessage({
         message: functionResponses,
       });
@@ -164,3 +152,4 @@ export class NainaAgent {
     return response.text || '';
   }
 }
+

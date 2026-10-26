@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "test:agent": "tsx src/test-agent.ts",
+    "test:tts": "tsx src/test-tts.ts",
+    "test:orchestrator": "tsx src/test-orchestrator.ts",
     "build": "tsc",
     "check-types": "tsc --noEmit"
   },

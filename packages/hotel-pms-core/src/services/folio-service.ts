@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db';
 import { folios, folioItems, reservations, rooms } from '../schema';
+import type { FolioItemCategory } from '@naina/shared-types';
 
 export async function getFolioByRoomNumber(roomNumber: string) {
   const [activeReservation] = await db
@@ -43,7 +44,7 @@ export async function addFolioCharge(
   folioId: string,
   description: string,
   amountCents: number,
-  category: 'room' | 'dining' | 'spa' | 'laundry' | 'parking' | 'misc' = 'dining'
+  category: FolioItemCategory = 'dining'
 ) {
   const [item] = await db
     .insert(folioItems)

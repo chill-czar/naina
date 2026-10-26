@@ -1,26 +1,59 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: #f5f4f8;
+  --ink: #1e1b2b;
+  --muted: #8a8699;
+  --lavender: #bebee5;
+  --lavender-border: #e2def0;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg: var(--bg);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --font-serif: var(--font-instrument-serif, 'Instrument Serif', Georgia, serif);
+  --font-sans: var(--font-inter, 'Inter', system-ui, -apple-system, sans-serif);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+html, body {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-inter, 'Inter', system-ui, -apple-system, sans-serif);
+}
+
+.font-serif {
+  font-family: var(--font-instrument-serif, 'Instrument Serif', Georgia, serif);
+}
+
+/* Background ambient glows */
+.pearl-background {
+  background-color: #f5f4f8;
+  background-image:
+    radial-gradient(70% 55% at 50% 42%, #ffffff 0%, rgba(255, 255, 255, 0) 70%),
+    radial-gradient(50% 40% at 50% 110%, rgba(190, 180, 235, 0.35) 0%, transparent 70%);
+}
+
+/* Custom subtle scrollbar for transcript drawer */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(138, 134, 153, 0.2);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(138, 134, 153, 0.4);
 }

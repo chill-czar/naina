@@ -1,7 +1,7 @@
 import { NainaAgent } from './agent/gemini-agent';
 
 async function test() {
-  console.log('🤖 Initializing Naina Agent with Gemini Flash...');
+  console.log('Initializing Naina Agent...');
   const agent = new NainaAgent();
 
   const prompts = [
@@ -10,9 +10,9 @@ async function test() {
   ];
 
   for (const p of prompts) {
-    console.log(`\n🗣️ Guest: "${p}"`);
+    console.log(`\nGuest: "${p}"`);
     const reply = await agent.processUserMessage(p);
-    console.log(`🎙️ Naina: "${reply}"`);
+    console.log(`Naina: "${reply}"`);
   }
 }
 

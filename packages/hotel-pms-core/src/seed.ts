@@ -2,16 +2,15 @@ import { db } from './db';
 import { roomTypes, rooms } from './schema';
 
 export async function seed() {
-  console.log('🌱 Seeding Naina Hotel PMS Database...');
+  console.log('Seeding database...');
 
-  // 1. Seed Room Types
   await db
     .insert(roomTypes)
     .values({
       code: 'DELUXE_KING',
       name: 'Deluxe King Room',
       description: 'Spacious 420 sq ft room with plush California King bed, marble bathroom, and skyline views.',
-      basePriceCents: 18900, // $189.00 / night
+      basePriceCents: 18900,
       maxOccupancy: 2,
       amenities: ['King Bed', 'High-speed Wi-Fi', 'Rain Shower', 'Espresso Machine', '55-inch OLED TV'],
     })
@@ -23,7 +22,7 @@ export async function seed() {
       code: 'EXECUTIVE_SUITE',
       name: 'Executive Balcony Suite',
       description: 'Luxurious 750 sq ft suite featuring separate living lounge, private furnished terrace, and deep soaking tub.',
-      basePriceCents: 34900, // $349.00 / night
+      basePriceCents: 34900,
       maxOccupancy: 4,
       amenities: ['King Bed + Sofa Bed', 'Private Balcony', 'Soaking Tub', 'Complimentary Minibar', 'Lounge Access'],
     })
@@ -35,7 +34,7 @@ export async function seed() {
       code: 'STANDARD_QUEEN',
       name: 'Classic Queen Room',
       description: 'Comfortable 300 sq ft room equipped with ergonomic workspace, ideal for business travelers.',
-      basePriceCents: 12900, // $129.00 / night
+      basePriceCents: 12900,
       maxOccupancy: 2,
       amenities: ['Queen Bed', 'Dedicated Desk', 'Coffee Maker', 'Walk-in Shower'],
     })
@@ -44,7 +43,6 @@ export async function seed() {
   const allTypes = await db.select().from(roomTypes);
   const typeMap = new Map(allTypes.map((t) => [t.code, t.id]));
 
-  // 2. Seed physical rooms across floors
   const sampleRooms = [
     { roomNumber: '101', typeCode: 'STANDARD_QUEEN', floor: 1 },
     { roomNumber: '102', typeCode: 'STANDARD_QUEEN', floor: 1 },
@@ -71,12 +69,13 @@ export async function seed() {
     }
   }
 
-  console.log('✅ Naina Hotel Database Seeded Successfully!');
+  console.log('Database seeded.');
 }
 
 seed()
   .then(() => process.exit(0))
   .catch((err) => {
-    console.error('❌ Seeding failed:', err);
+    console.error('Seeding failed:', err);
     process.exit(1);
   });
+

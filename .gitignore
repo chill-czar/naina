@@ -25,3 +25,6 @@ pnpm-debug.log*
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Test audio artifacts
+*.pcm

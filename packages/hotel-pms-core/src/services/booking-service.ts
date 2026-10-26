@@ -3,30 +3,26 @@ import { db } from '../db';
 import { roomTypes, rooms, guests, reservations, folios, folioItems } from '../schema';
 import type { CheckAvailabilityParams, AvailableRoomOption } from '@naina/shared-types';
 
+function countNights(checkInDate: string, checkOutDate: string): number {
+  const checkIn = new Date(checkInDate);
+  const checkOut = new Date(checkOutDate);
+  const diffTime = Math.abs(checkOut.getTime() - checkIn.getTime());
+  return Math.max(1, Math.ceil(diffTime / 86400000));
+}
+
 export async function checkAvailability(
   params: CheckAvailabilityParams
 ): Promise<AvailableRoomOption[]> {
   const { checkInDate, checkOutDate, numberOfGuests = 1, roomTypeCode } = params;
-
-  // Calculate nights
-  const checkIn = new Date(checkInDate);
-  const checkOut = new Date(checkOutDate);
-  const diffTime = Math.abs(checkOut.getTime() - checkIn.getTime());
-  const nights = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
-
-  // Query all active room types
+  const nights = countNights(checkInDate, checkOutDate);
   const types = await db.select().from(roomTypes);
-
   const results: AvailableRoomOption[] = [];
 
   for (const rt of types) {
     if (numberOfGuests > rt.maxOccupancy) continue;
     if (roomTypeCode && rt.code.toLowerCase() !== roomTypeCode.toLowerCase()) continue;
 
-    // Count total rooms of this type
     const allRooms = await db.select().from(rooms).where(eq(rooms.roomTypeId, rt.id));
-
-    // Find conflicting overlapping reservations
     const overlappingReservations = await db
       .select()
       .from(reservations)
@@ -44,7 +40,11 @@ export async function checkAvailability(
     if (availableCount > 0) {
       results.push({
         roomTypeId: rt.id,
+        code: rt.code,
         name: rt.name,
+        description: rt.description,
+        maxOccupancy: rt.maxOccupancy,
+        amenities: rt.amenities,
         availableCount,
         pricePerNightCents: rt.basePriceCents,
         totalNights: nights,
@@ -69,7 +69,6 @@ export interface CreateReservationInput {
 }
 
 export async function createReservation(input: CreateReservationInput) {
-  // 1. Find or create guest
   let [guest] = await db.select().from(guests).where(eq(guests.email, input.email));
   if (!guest) {
     [guest] = await db
@@ -83,22 +82,16 @@ export async function createReservation(input: CreateReservationInput) {
       .returning();
   }
 
-  // 2. Fetch room type for price calculation
   const [rt] = await db.select().from(roomTypes).where(eq(roomTypes.id, input.roomTypeId));
   if (!rt) {
     throw new Error(`Room type with id ${input.roomTypeId} not found`);
   }
 
-  const checkIn = new Date(input.checkInDate);
-  const checkOut = new Date(input.checkOutDate);
-  const nights = Math.max(1, Math.ceil(Math.abs(checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24)));
+  const nights = countNights(input.checkInDate, input.checkOutDate);
   const totalAmountCents = rt.basePriceCents * nights;
-
-  // 3. Generate unique booking reference (e.g. NAINA-9341)
   const randomSuffix = Math.floor(1000 + Math.random() * 9000);
   const bookingReference = `NAINA-${randomSuffix}`;
 
-  // 4. Create reservation
   const [reservation] = await db
     .insert(reservations)
     .values({
@@ -114,7 +107,6 @@ export async function createReservation(input: CreateReservationInput) {
     })
     .returning();
 
-  // 5. Initialize guest folio
   const [folio] = await db
     .insert(folios)
     .values({
@@ -125,13 +117,13 @@ export async function createReservation(input: CreateReservationInput) {
     })
     .returning();
 
-  // 6. Add initial room charge to folio
   await db.insert(folioItems).values({
     folioId: folio.id,
     description: `${rt.name} (${nights} nights @ $${(rt.basePriceCents / 100).toFixed(2)}/night)`,
     category: 'room',
     amountCents: totalAmountCents,
   });
+
 
   return {
     bookingReference: reservation.bookingReference,

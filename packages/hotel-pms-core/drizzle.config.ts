@@ -2,7 +2,6 @@ import { defineConfig } from 'drizzle-kit';
 import path from 'path';
 import * as dotenv from 'dotenv';
 
-// Load .env from current directory or monorepo root
 dotenv.config();
 dotenv.config({ path: path.resolve(process.cwd(), '../../.env') });
 

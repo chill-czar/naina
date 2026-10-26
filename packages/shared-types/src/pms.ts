@@ -35,8 +35,8 @@ export interface Reservation {
   guestId: string;
   roomTypeId: string;
   roomId?: string | null;
-  checkInDate: string; // YYYY-MM-DD
-  checkOutDate: string; // YYYY-MM-DD
+  checkInDate: string;
+  checkOutDate: string;
   numberOfGuests: number;
   totalAmountCents: number;
   status: ReservationStatus;
@@ -81,7 +81,11 @@ export interface CheckAvailabilityParams {
 
 export interface AvailableRoomOption {
   roomTypeId: string;
+  code?: string;
   name: string;
+  description?: string;
+  maxOccupancy?: number;
+  amenities?: string[];
   availableCount: number;
   pricePerNightCents: number;
   totalNights: number;

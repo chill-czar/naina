@@ -9,10 +9,10 @@ export const roomStatusEnum = pgEnum('room_status', [
 
 export const roomTypes = pgTable('room_types', {
   id: uuid('id').defaultRandom().primaryKey(),
-  code: varchar('code', { length: 50 }).notNull().unique(), // e.g. 'DELUXE_KING', 'EXECUTIVE_SUITE'
+  code: varchar('code', { length: 50 }).notNull().unique(),
   name: varchar('name', { length: 150 }).notNull(),
   description: text('description').notNull(),
-  basePriceCents: integer('base_price_cents').notNull(), // in cents (e.g. 19900 = $199.00)
+  basePriceCents: integer('base_price_cents').notNull(),
   maxOccupancy: integer('max_occupancy').notNull().default(2),
   amenities: text('amenities').array().notNull().default([]),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -21,7 +21,7 @@ export const roomTypes = pgTable('room_types', {
 
 export const rooms = pgTable('rooms', {
   id: uuid('id').defaultRandom().primaryKey(),
-  roomNumber: varchar('room_number', { length: 20 }).notNull().unique(), // e.g. '301', ' penthouse-1'
+  roomNumber: varchar('room_number', { length: 20 }).notNull().unique(),
   roomTypeId: uuid('room_type_id')
     .notNull()
     .references(() => roomTypes.id, { onDelete: 'cascade' }),

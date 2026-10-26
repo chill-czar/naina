@@ -1,7 +1,6 @@
 import path from 'path';
 import * as dotenv from 'dotenv';
 
-// Load .env from local directory or monorepo root
 dotenv.config();
 dotenv.config({ path: path.resolve(process.cwd(), '../../.env') });
 
@@ -13,9 +12,9 @@ export const config = {
   },
   cartesia: {
     apiKey: process.env.CARTESIA_API_KEY || '',
-    voiceId: process.env.CARTESIA_VOICE_ID || 'a0e99841-438c-4a64-b679-ae501e7d6091', // default friendly concierge voice
+    voiceId: process.env.CARTESIA_VOICE_ID || 'a0e99841-438c-4a64-b679-ae501e7d6091',
     sttModel: 'ink-2',
-    ttsModel: 'sonic',
+    ttsModel: 'sonic-3.6',
   },
   livekit: {
     url: process.env.LIVEKIT_URL || '',
