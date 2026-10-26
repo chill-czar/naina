@@ -1,0 +1,25 @@
+{
+  "name": "@naina/voice-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "test:agent": "tsx src/test-agent.ts",
+    "build": "tsc",
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cartesia/cartesia-js": "^4.2.0",
+    "@google/genai": "^2.31.0",
+    "@naina/hotel-pms-core": "workspace:*",
+    "@naina/shared-types": "workspace:*",
+    "dotenv": "^16.4.7",
+    "livekit-server-sdk": "^2.9.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2"
+  }
+}

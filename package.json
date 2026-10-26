@@ -1,0 +1,23 @@
+{
+  "name": "naina-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "turbo dev",
+    "dev:agent": "turbo dev --filter=@naina/voice-server",
+    "dev:web": "turbo dev --filter=@naina/web-client",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "check-types": "turbo check-types",
+    "db:generate": "pnpm --filter @naina/hotel-pms-core db:generate",
+    "db:migrate": "pnpm --filter @naina/hotel-pms-core db:migrate",
+    "db:studio": "pnpm --filter @naina/hotel-pms-core db:studio",
+    "test:agent": "pnpm --filter @naina/voice-server test:agent"
+  },
+  "devDependencies": {
+    "turbo": "^2.4.4",
+    "typescript": "^5.7.3",
+    "@types/node": "^22.13.0"
+  },
+  "packageManager": "pnpm@10.30.3"
+}
