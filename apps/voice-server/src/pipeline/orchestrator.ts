@@ -8,6 +8,7 @@ export class VoiceOrchestrator extends EventEmitter {
   private state: AgentState = 'IDLE';
   private sttStream: any = null;
   private isInterrupted = false;
+  private sttHasError = false;
 
   constructor() {
     super();
@@ -24,6 +25,7 @@ export class VoiceOrchestrator extends EventEmitter {
 
   public startSession() {
     this.setState('LISTENING');
+    this.sttHasError = false;
     this.sttStream = createSTTStream(16000);
 
     this.sttStream.on('turn.start', () => {
@@ -49,14 +51,31 @@ export class VoiceOrchestrator extends EventEmitter {
     });
 
     this.sttStream.on('error', (err: any) => {
-      console.error('[stt error]', err);
-      this.emit('error', err);
+      this.sttHasError = true;
+      let message = err?.message || 'Speech-to-text service error';
+      const isQuotaOrNetworkError =
+        err?.cause?.message?.includes('402') ||
+        message.includes('402') ||
+        message.includes('non-101') ||
+        message.includes('send queue is full');
+
+      if (isQuotaOrNetworkError) {
+        message =
+          'Cartesia credit limit reached (HTTP 402 Payment Required: quota_exceeded). Please add credits at https://play.cartesia.ai/subscription or update CARTESIA_API_KEY in .env.';
+        console.error(`[stt error] ${message}`);
+      } else {
+        console.error('[stt error]', err);
+      }
+
+      this.emit('error', new Error(message));
     });
   }
 
   public handleIncomingAudio(chunk: Buffer | Uint8Array) {
-    if (this.sttStream?.sendRaw) {
-      this.sttStream.sendRaw(chunk);
+    if (this.sttStream?.sendRaw && !this.sttHasError) {
+      try {
+        this.sttStream.sendRaw(chunk);
+      } catch {}
     }
   }
 

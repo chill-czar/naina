@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
     "test:agent": "tsx src/test-agent.ts",
     "test:tts": "tsx src/test-tts.ts",
     "test:orchestrator": "tsx src/test-orchestrator.ts",

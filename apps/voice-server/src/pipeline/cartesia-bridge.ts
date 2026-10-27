@@ -8,21 +8,29 @@ export const cartesia = new Cartesia({
 export async function* synthesizeSpeechStream(text: string): AsyncGenerator<Uint8Array> {
   if (!text.trim()) return;
 
-  const response = await cartesia.tts.generate({
-    model_id: config.cartesia.ttsModel,
-    transcript: text,
-    voice: {
-      mode: 'id',
-      id: config.cartesia.voiceId,
-    },
-    output_format: {
-      container: 'raw',
-      encoding: 'pcm_s16le',
-      sample_rate: 24000,
-    },
-  });
+  let response: any;
+  try {
+    response = await cartesia.tts.generate({
+      model_id: config.cartesia.ttsModel,
+      transcript: text,
+      voice: {
+        mode: 'id',
+        id: config.cartesia.voiceId,
+      },
+      output_format: {
+        container: 'raw',
+        encoding: 'pcm_s16le',
+        sample_rate: 24000,
+      },
+    });
+  } catch (err: any) {
+    if (err?.status === 402 || err?.message?.includes('402')) {
+      throw new Error('Cartesia credit limit reached (HTTP 402 Payment Required). Please upgrade your subscription or add credits at https://play.cartesia.ai/subscription');
+    }
+    throw err;
+  }
 
-  if (!response.body) {
+  if (!response?.body) {
     throw new Error('No audio body stream returned from Cartesia TTS');
   }
 
