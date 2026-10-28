@@ -8,7 +8,7 @@ export const config = {
   port: parseInt(process.env.PORT || '4000', 10),
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || '',
-    model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+    model: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
   },
   cartesia: {
     apiKey: process.env.CARTESIA_API_KEY || '',
