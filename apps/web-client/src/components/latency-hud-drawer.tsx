@@ -400,7 +400,7 @@ export function LatencyHUDDrawer({
                         isHovered ? 'fill-[#1e1b2b] font-bold' : 'fill-[#8a8699]'
                       }`}
                     >
-                      {pt.turn.turnId ? pt.turn.turnId.replace('turn_', '#') : `#${i + 1}`}
+                      {pt.turn.turnId ? '#' + pt.turn.turnId.split('_').pop() : `#${i + 1}`}
                     </text>
 
                     {/* Tooltip on hover */}

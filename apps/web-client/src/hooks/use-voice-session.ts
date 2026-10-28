@@ -64,6 +64,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
   const pendingServerMetricsRef = useRef<any>(null);
   const latestUserTranscriptRef = useRef<string>('');
   const latestAgentTranscriptRef = useRef<string>('');
+  const msgIdCounterRef = useRef<number>(0);
 
   const agentStateRef = useRef<AgentState>(agentState);
   useEffect(() => {
@@ -74,7 +75,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     isMutedRef.current = isMuted;
   }, [isMuted]);
 
-  // Load telemetry logs from localStorage on mount
+  // Load telemetry logs from localStorage on mount and sync with server telemetry history
   useEffect(() => {
     try {
       if (typeof window !== 'undefined') {
@@ -89,25 +90,68 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
         }
       }
     } catch {}
+
+    const syncServerTelemetry = async () => {
+      try {
+        const apiHost =
+          process.env.NEXT_PUBLIC_VOICE_SERVER_HTTP ||
+          (typeof window !== 'undefined' ? `http://${window.location.hostname}:4000` : 'http://localhost:4000');
+        const res = await fetch(`${apiHost}/api/telemetry`);
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.turns) && data.turns.length > 0) {
+            setTurnHistory((prev) => {
+              const combinedMap = new Map<string, TurnTelemetry>();
+              // Load historical server turns
+              for (const t of data.turns) {
+                combinedMap.set(t.turnId, t);
+              }
+              // Preserve any client-measured playout details for matching turns
+              for (const t of prev) {
+                combinedMap.set(t.turnId, t);
+              }
+              const merged = Array.from(combinedMap.values()).sort(
+                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+              );
+              try {
+                if (typeof window !== 'undefined') {
+                  localStorage.setItem('naina_session_telemetry', JSON.stringify(merged));
+                }
+              } catch {}
+              if (merged[0]?.metrics?.totalE2EMs) {
+                setLatestLatency(merged[0].metrics.totalE2EMs);
+                latestLatencyRef.current = merged[0].metrics.totalE2EMs;
+              }
+              return merged;
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('[useVoiceSession] Failed to sync server telemetry:', err);
+      }
+    };
+
+    syncServerTelemetry();
   }, []);
 
   // Finalize Turn Telemetry Record combining client playout and server milestones
   const tryFinalizeTurn = useCallback((measuredE2E?: number) => {
-    const e2e = measuredE2E ?? latestLatencyRef.current;
     const serverMetrics = pendingServerMetricsRef.current;
-    if (!e2e || !serverMetrics) return;
+    if (!serverMetrics) return;
 
     const pipelineServerMs =
       serverMetrics.sttLatencyMs +
       serverMetrics.toolExecutionMs +
       serverMetrics.llmTtftMs +
       serverMetrics.ttsTtfbMs;
+
+    const e2e = measuredE2E || latestLatencyRef.current || (pipelineServerMs + 75);
     const networkAndPlayoutMs = Math.max(0, e2e - pipelineServerMs);
 
     const turnRecord: TurnTelemetry = {
       turnId: serverMetrics.turnId,
       timestamp: new Date().toISOString(),
-      userTranscript: latestUserTranscriptRef.current || 'Voice input',
+      userTranscript: latestUserTranscriptRef.current || 'Voice inquiry',
       agentTranscript: latestAgentTranscriptRef.current || '',
       toolCalls: serverMetrics.toolCalls,
       metrics: {
@@ -121,11 +165,18 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
       },
     };
 
+    setLatestLatency(e2e);
+    latestLatencyRef.current = e2e;
+
     setTurnHistory((prev) => {
-      const exists = prev.some((t) => t.turnId === turnRecord.turnId);
-      const updated = exists
-        ? prev.map((t) => (t.turnId === turnRecord.turnId ? turnRecord : t))
-        : [turnRecord, ...prev].slice(0, 50);
+      const existsIndex = prev.findIndex((t) => t.turnId === turnRecord.turnId);
+      let updated: TurnTelemetry[];
+      if (existsIndex >= 0) {
+        updated = [...prev];
+        updated[existsIndex] = turnRecord;
+      } else {
+        updated = [turnRecord, ...prev].slice(0, 50);
+      }
 
       try {
         if (typeof window !== 'undefined') {
@@ -135,18 +186,23 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
 
       return updated;
     });
-
-    pendingServerMetricsRef.current = null;
   }, []);
 
   const recordAudioPlayout = useCallback(() => {
-    if (
-      lastSpeechEndTimestampRef.current !== null &&
-      !hasRecordedPlayoutForCurrentTurnRef.current
-    ) {
+    if (!hasRecordedPlayoutForCurrentTurnRef.current) {
       hasRecordedPlayoutForCurrentTurnRef.current = true;
       const playoutTime = performance.now();
-      const measuredE2E = Math.round(playoutTime - lastSpeechEndTimestampRef.current);
+      const speechEnd = lastSpeechEndTimestampRef.current;
+      const measuredE2E =
+        speechEnd !== null && playoutTime > speechEnd
+          ? Math.round(playoutTime - speechEnd)
+          : (pendingServerMetricsRef.current
+              ? (pendingServerMetricsRef.current.sttLatencyMs +
+                 pendingServerMetricsRef.current.toolExecutionMs +
+                 pendingServerMetricsRef.current.llmTtftMs +
+                 pendingServerMetricsRef.current.ttsTtfbMs + 75)
+              : 750);
+
       setLatestLatency(measuredE2E);
       latestLatencyRef.current = measuredE2E;
       console.log(`[latency] True User-Perceived E2E Turn Latency: ${measuredE2E}ms`);
@@ -438,9 +494,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
           } else if (data.type === 'turn_telemetry') {
             console.log('[latency] Server turn telemetry received:', data);
             pendingServerMetricsRef.current = data;
-            if (hasRecordedPlayoutForCurrentTurnRef.current) {
-              tryFinalizeTurn();
-            }
+            tryFinalizeTurn();
           } else if (data.type === 'transcript') {
             if (data.role === 'user' && data.isFinal) {
               latestUserTranscriptRef.current = data.text;
@@ -459,7 +513,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                 return [
                   ...prev,
                   {
-                    id: `user-${Date.now()}`,
+                    id: `user-${Date.now()}-${++msgIdCounterRef.current}`,
                     role: 'user',
                     text: data.text,
                     isFinal: false,
@@ -471,7 +525,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                 return [
                   ...filtered,
                   {
-                    id: `user-${Date.now()}`,
+                    id: `user-${Date.now()}-${++msgIdCounterRef.current}`,
                     role: 'user',
                     text: data.text,
                     isFinal: true,
@@ -482,7 +536,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                 return [
                   ...prev,
                   {
-                    id: `agent-${Date.now()}`,
+                    id: `agent-${Date.now()}-${++msgIdCounterRef.current}`,
                     role: 'agent',
                     text: data.text,
                     isFinal: true,

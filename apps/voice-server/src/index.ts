@@ -5,6 +5,7 @@ import { config } from './config';
 import { VoiceOrchestrator } from './pipeline/orchestrator';
 import { checkAvailability } from '@naina/hotel-pms-core';
 import { liveKitAgentManager } from './pipeline/livekit-agent';
+import { getHistoricalTurnLogs } from './pipeline/telemetry-logger';
 
 const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -96,6 +97,18 @@ const server = http.createServer(async (req, res) => {
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ rooms }));
+    } catch (err: any) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/telemetry' && req.method === 'GET') {
+    try {
+      const turns = getHistoricalTurnLogs();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ turns }));
     } catch (err: any) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));

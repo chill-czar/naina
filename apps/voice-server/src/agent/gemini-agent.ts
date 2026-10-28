@@ -125,6 +125,21 @@ export interface AgentResponseResult {
   totalToolDurationMs: number;
 }
 
+export type AgentStreamEvent =
+  | { type: 'token'; text: string }
+  | {
+      type: 'tool_call';
+      name: string;
+      args: Record<string, any>;
+      durationMs: number;
+    }
+  | {
+      type: 'done';
+      fullText: string;
+      toolCalls: Array<{ name: string; args: Record<string, any>; durationMs: number }>;
+      totalToolDurationMs: number;
+    };
+
 export class NainaAgent {
   private chatSession: any;
 
@@ -139,24 +154,59 @@ export class NainaAgent {
     });
   }
 
-  async processUserMessage(userTranscript: string): Promise<AgentResponseResult> {
+  async *processUserMessageStream(
+    userTranscript: string,
+    signal?: AbortSignal
+  ): AsyncGenerator<AgentStreamEvent> {
     const toolCalls: Array<{ name: string; args: Record<string, any>; durationMs: number }> = [];
     let totalToolDurationMs = 0;
+    let fullText = '';
 
-    let response = await this.chatSession.sendMessage({ message: userTranscript });
+    let currentMessage: any = userTranscript;
 
-    while (response.functionCalls && response.functionCalls.length > 0) {
+    while (!signal?.aborted) {
+      const stream = await this.chatSession.sendMessageStream({ message: currentMessage });
+      const pendingFunctionCalls: any[] = [];
+
+      for await (const chunk of stream) {
+        if (signal?.aborted) return;
+
+        if (chunk.functionCalls && chunk.functionCalls.length > 0) {
+          pendingFunctionCalls.push(...chunk.functionCalls);
+        }
+
+        if (chunk.text) {
+          fullText += chunk.text;
+          yield { type: 'token', text: chunk.text };
+        }
+      }
+
+      if (pendingFunctionCalls.length === 0) {
+        break;
+      }
+
+      // Execute tool calls
       const functionResponses = [];
-      for (const call of response.functionCalls) {
+      for (const call of pendingFunctionCalls) {
+        if (signal?.aborted) return;
         const tStart = performance.now();
         const toolResult = await executeTool(call.name, call.args);
         const duration = Math.round(performance.now() - tStart);
-        toolCalls.push({
+
+        const callRecord = {
           name: call.name,
           args: call.args,
           durationMs: duration,
-        });
+        };
+        toolCalls.push(callRecord);
         totalToolDurationMs += duration;
+
+        yield {
+          type: 'tool_call',
+          name: call.name,
+          args: call.args,
+          durationMs: duration,
+        };
 
         functionResponses.push({
           functionResponse: {
@@ -166,13 +216,44 @@ export class NainaAgent {
         });
       }
 
-      response = await this.chatSession.sendMessage({
-        message: functionResponses,
-      });
+      currentMessage = functionResponses;
+    }
+
+    yield {
+      type: 'done',
+      fullText,
+      toolCalls,
+      totalToolDurationMs,
+    };
+  }
+
+  async processUserMessage(userTranscript: string): Promise<AgentResponseResult> {
+    let fullText = '';
+    const toolCalls: Array<{ name: string; args: Record<string, any>; durationMs: number }> = [];
+    let totalToolDurationMs = 0;
+
+    for await (const event of this.processUserMessageStream(userTranscript)) {
+      if (event.type === 'token') {
+        fullText += event.text;
+      } else if (event.type === 'tool_call') {
+        toolCalls.push({
+          name: event.name,
+          args: event.args,
+          durationMs: event.durationMs,
+        });
+        totalToolDurationMs += event.durationMs;
+      } else if (event.type === 'done') {
+        fullText = event.fullText;
+        return {
+          text: fullText,
+          toolCalls: event.toolCalls,
+          totalToolDurationMs: event.totalToolDurationMs,
+        };
+      }
     }
 
     return {
-      text: response.text || '',
+      text: fullText,
       toolCalls,
       totalToolDurationMs,
     };
