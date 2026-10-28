@@ -82,6 +82,9 @@ export class VoiceOrchestrator extends EventEmitter {
   public interrupt(): void {
     this.isInterrupted = true;
     this.emit('bargeIn');
+    if (this.state === 'SPEAKING' || this.state === 'THINKING') {
+      this.setState('LISTENING');
+    }
   }
 
   public async handleUserTurn(transcript: string) {

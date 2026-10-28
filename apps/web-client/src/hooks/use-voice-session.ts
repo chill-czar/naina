@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { Room, RoomEvent, Track, RemoteTrack, RemoteParticipant } from 'livekit-client';
 import type { AgentState } from '@naina/shared-types';
+import { useSileroVAD } from './use-silero-vad';
 
 export interface TranscriptMessage {
   id: string;
@@ -13,6 +15,7 @@ export interface TranscriptMessage {
 
 export interface UseVoiceSessionOptions {
   serverUrl?: string;
+  roomName?: string;
 }
 
 export type MicPermissionStatus = 'checking' | 'prompt' | 'granted' | 'denied';
@@ -30,11 +33,7 @@ function getAudioContextClass(): typeof AudioContext {
 }
 
 export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
-  const serverUrl =
-    options.serverUrl ||
-    (typeof window !== 'undefined'
-      ? process.env.NEXT_PUBLIC_VOICE_SERVER_WS || `ws://${window.location.hostname}:4000/ws/voice`
-      : 'ws://localhost:4000/ws/voice');
+  const defaultRoomName = options.roomName || 'naina-concierge-room';
 
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -45,21 +44,50 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
   const [error, setError] = useState<string | null>(null);
   const [hasMic, setHasMic] = useState(false);
   const [micPermission, setMicPermission] = useState<MicPermissionStatus>('checking');
+  const [activeMediaStream, setActiveMediaStream] = useState<MediaStream | null>(null);
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const playbackContextRef = useRef<AudioContext | null>(null);
+  const roomRef = useRef<Room | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
-  const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
-  const pendingStateRef = useRef<AgentState | null>(null);
-  const nextPlayTimeRef = useRef<number>(0);
-  const leftoverPlaybackByteRef = useRef<Uint8Array | null>(null);
+  const agentAudioElementRef = useRef<HTMLAudioElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
   const isMutedRef = useRef(isMuted);
 
   useEffect(() => {
     isMutedRef.current = isMuted;
   }, [isMuted]);
+
+  // Handle instant local barge-in (<10ms) from Silero VAD
+  const handleLocalBargeIn = useCallback(() => {
+    console.log('[Silero VAD] Speech detected - executing instant sub-10ms local cutoff');
+
+    // 1. Immediately mute and pause local playback of agent voice
+    if (agentAudioElementRef.current) {
+      agentAudioElementRef.current.muted = true;
+      agentAudioElementRef.current.pause();
+    }
+    setAgentState('LISTENING');
+
+    // 2. Transmit barge_in packet to LiveKit Voice Server over Data Channel
+    if (roomRef.current?.localParticipant) {
+      try {
+        const payload = new TextEncoder().encode(JSON.stringify({ type: 'barge_in' }));
+        roomRef.current.localParticipant.publishData(payload, { reliable: true }).catch(() => {});
+      } catch (e) {
+        console.warn('Failed to publish barge-in packet:', e);
+      }
+    }
+  }, []);
+
+  // Initialize Client-Side Silero VAD hook
+  const { isSpeechActive } = useSileroVAD({
+    enabled: isConnected && !isMuted,
+    stream: activeMediaStream,
+    positiveSpeechThreshold: 0.6,
+    negativeSpeechThreshold: 0.4,
+    minSpeechFrames: 3,
+    onSpeechStart: handleLocalBargeIn,
+  });
 
   const requestMicPermission = useCallback(async (): Promise<boolean> => {
     if (typeof window === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
@@ -129,133 +157,37 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     };
   }, [requestMicPermission]);
 
-  const stopAllPlayback = useCallback(() => {
-    for (const source of activeSourcesRef.current) {
-      try {
-        source.stop();
-        source.disconnect();
-      } catch {}
-    }
-    activeSourcesRef.current = [];
-    pendingStateRef.current = null;
-    leftoverPlaybackByteRef.current = null;
-    if (playbackContextRef.current) {
-      nextPlayTimeRef.current = playbackContextRef.current.currentTime;
-    }
-  }, []);
+  // Audio level analyser loop for VoiceOrb mouth animations
+  useEffect(() => {
+    let animId: number;
+    const dataArray = new Uint8Array(128);
 
-  const processMicAudio = useCallback((inputData: Float32Array, inputSampleRate: number): ArrayBuffer => {
-    const targetSampleRate = 16000;
-    let pcm16: Int16Array;
-
-    if (inputSampleRate === targetSampleRate) {
-      pcm16 = new Int16Array(inputData.length);
-      for (let i = 0; i < inputData.length; i++) {
-        const s = Math.max(-1, Math.min(1, inputData[i]));
-        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-      }
-    } else {
-      const ratio = inputSampleRate / targetSampleRate;
-      const newLength = Math.round(inputData.length / ratio);
-      pcm16 = new Int16Array(newLength);
-      let offsetResult = 0;
-      let offsetBuffer = 0;
-
-      while (offsetResult < pcm16.length) {
-        const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
-        let accum = 0;
-        let count = 0;
-        for (let i = offsetBuffer; i < nextOffsetBuffer && i < inputData.length; i++) {
-          accum += inputData[i];
-          count++;
+    function checkLevel() {
+      if (analyserRef.current && agentState === 'SPEAKING') {
+        analyserRef.current.getByteTimeDomainData(dataArray);
+        let sumSq = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          const val = (dataArray[i] - 128) / 128;
+          sumSq += val * val;
         }
-        const s = count > 0 ? accum / count : 0;
-        const clamped = Math.max(-1, Math.min(1, s));
-        pcm16[offsetResult] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
-        offsetResult++;
-        offsetBuffer = nextOffsetBuffer;
+        const rms = Math.sqrt(sumSq / dataArray.length);
+        setAudioLevel((prev) => Math.max(prev * 0.7, Math.min(1, rms * 4)));
+      } else {
+        setAudioLevel((prev) => (prev > 0.01 ? prev * 0.8 : 0));
       }
+      animId = requestAnimationFrame(checkLevel);
     }
 
-    return pcm16.buffer as ArrayBuffer;
-  }, []);
-
-  const queueAudioChunk = useCallback((arrayBuffer: ArrayBuffer) => {
-    try {
-      if (!playbackContextRef.current) {
-        const AudioCtx = getAudioContextClass();
-        playbackContextRef.current = new AudioCtx();
-      }
-      const ctx = playbackContextRef.current;
-      if (ctx.state === 'suspended') {
-        ctx.resume();
-      }
-
-      let rawBytes = new Uint8Array(arrayBuffer);
-      if (leftoverPlaybackByteRef.current && leftoverPlaybackByteRef.current.length > 0) {
-        const merged = new Uint8Array(leftoverPlaybackByteRef.current.length + rawBytes.length);
-        merged.set(leftoverPlaybackByteRef.current, 0);
-        merged.set(rawBytes, leftoverPlaybackByteRef.current.length);
-        rawBytes = merged;
-        leftoverPlaybackByteRef.current = null;
-      }
-
-      // 16-bit PCM sample alignment
-      const odd = rawBytes.length % 2;
-      if (odd !== 0) {
-        leftoverPlaybackByteRef.current = rawBytes.slice(rawBytes.length - odd);
-        rawBytes = rawBytes.subarray(0, rawBytes.length - odd);
-      }
-
-      if (rawBytes.length === 0) return;
-
-      const int16View = new Int16Array(rawBytes.buffer, rawBytes.byteOffset, rawBytes.length / 2);
-      const float32Samples = new Float32Array(int16View.length);
-      let sumSq = 0;
-
-      for (let i = 0; i < int16View.length; i++) {
-        const s = int16View[i] / 32768.0;
-        float32Samples[i] = s;
-        sumSq += s * s;
-      }
-
-      const rms = Math.sqrt(sumSq / (int16View.length || 1));
-      setAudioLevel((prev) => Math.max(prev * 0.7, Math.min(1, rms * 4)));
-
-      const audioBuffer = ctx.createBuffer(1, float32Samples.length, 24000);
-      audioBuffer.getChannelData(0).set(float32Samples);
-
-      const sourceNode = ctx.createBufferSource();
-      sourceNode.buffer = audioBuffer;
-      sourceNode.connect(ctx.destination);
-
-      const currentTime = ctx.currentTime;
-      if (nextPlayTimeRef.current < currentTime) {
-        nextPlayTimeRef.current = currentTime + 0.02;
-      }
-
-      sourceNode.start(nextPlayTimeRef.current);
-      nextPlayTimeRef.current += audioBuffer.duration;
-
-      activeSourcesRef.current.push(sourceNode);
-
-      sourceNode.onended = () => {
-        activeSourcesRef.current = activeSourcesRef.current.filter((s) => s !== sourceNode);
-        if (activeSourcesRef.current.length === 0 && pendingStateRef.current) {
-          setAgentState(pendingStateRef.current);
-          pendingStateRef.current = null;
-        }
-      };
-    } catch (err) {
-      console.error('Error playing audio chunk:', err);
-    }
-  }, []);
+    animId = requestAnimationFrame(checkLevel);
+    return () => cancelAnimationFrame(animId);
+  }, [agentState]);
 
   const startCall = useCallback(async () => {
     try {
       setError(null);
       setIsConnecting(true);
 
+      // 1. Acquire microphone stream with WebRTC acoustic echo cancellation
       let stream: MediaStream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -280,204 +212,240 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
       }
 
       mediaStreamRef.current = stream;
+      setActiveMediaStream(stream);
       setMicPermission('granted');
       setHasMic(true);
 
-      const AudioCtx = getAudioContextClass();
-      const outputCtx = new AudioCtx();
-      playbackContextRef.current = outputCtx;
-      if (outputCtx.state === 'suspended') {
-        await outputCtx.resume();
+      // 2. Fetch LiveKit Room token from Voice Server
+      const apiHost =
+        typeof window !== 'undefined'
+          ? (process.env.NEXT_PUBLIC_VOICE_SERVER_HTTP || `http://${window.location.hostname}:4000`)
+          : 'http://localhost:4000';
+
+      const tokenRes = await fetch(`${apiHost}/api/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomName: defaultRoomName,
+          participantName: `guest-${Math.floor(1000 + Math.random() * 9000)}`,
+        }),
+      });
+
+      if (!tokenRes.ok) {
+        const errJson = await tokenRes.json().catch(() => ({}));
+        throw new Error(errJson.error || `Voice Server token error: ${tokenRes.status}`);
       }
-      nextPlayTimeRef.current = outputCtx.currentTime;
 
-      const inputCtx = new AudioCtx();
-      audioContextRef.current = inputCtx;
-      if (inputCtx.state === 'suspended') {
-        await inputCtx.resume();
-      }
+      const { token, url: liveKitUrl } = await tokenRes.json();
+      console.log(`[useVoiceSession] Token received, connecting to LiveKit: ${liveKitUrl}`);
 
-      const ws = new WebSocket(serverUrl);
-      ws.binaryType = 'arraybuffer';
-      wsRef.current = ws;
+      // 3. Connect to LiveKit Room via WebRTC
+      const room = new Room({
+        adaptiveStream: true,
+        dynacast: true,
+      });
+      roomRef.current = room;
 
-      ws.onopen = () => {
-        console.log('[voice-session] connected');
-        setIsConnected(true);
-        setIsConnecting(false);
-        setAgentState('LISTENING');
+      room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
+        console.log(`[useVoiceSession] Remote track subscribed: ${track.kind}`);
+        if (track.kind === Track.Kind.Audio) {
+          const audioElement = track.attach();
+          audioElement.autoplay = true;
+          agentAudioElementRef.current = audioElement;
 
-        const sourceNode = inputCtx.createMediaStreamSource(stream);
-        const processor = inputCtx.createScriptProcessor(2048, 1, 1);
-        scriptProcessorRef.current = processor;
-
-        processor.onaudioprocess = (e) => {
-          if (ws.readyState !== WebSocket.OPEN) return;
-          if (isMutedRef.current) return;
-
-          const inputChannel = e.inputBuffer.getChannelData(0);
-          let sumSq = 0;
-          for (let i = 0; i < inputChannel.length; i++) {
-            sumSq += inputChannel[i] * inputChannel[i];
-          }
-          const rms = Math.sqrt(sumSq / inputChannel.length);
-          if (rms > 0.01) {
-            setAudioLevel((prev) => Math.max(prev * 0.7, Math.min(1, rms * 5)));
-          }
-
-          const pcmBuffer = processMicAudio(inputChannel, inputCtx.sampleRate);
-          ws.send(pcmBuffer);
-        };
-
-        sourceNode.connect(processor);
-        processor.connect(inputCtx.destination);
-      };
-
-      ws.onmessage = (event) => {
-        if (typeof event.data === 'string') {
+          // Attach Web Audio Analyser for VoiceOrb mouth movement
           try {
-            const data = JSON.parse(event.data);
-            if (data.type === 'state') {
-              if (data.state === 'LISTENING' && activeSourcesRef.current.length > 0) {
-                pendingStateRef.current = 'LISTENING';
-              } else {
-                pendingStateRef.current = null;
-                setAgentState(data.state);
-              }
-            } else if (data.type === 'barge_in') {
-              stopAllPlayback();
-              setAgentState('LISTENING');
-            } else if (data.type === 'transcript') {
-              setTranscripts((prev) => {
-                if (data.role === 'user' && !data.isFinal) {
-                  const lastIdx = prev.length - 1;
-                  if (lastIdx >= 0 && prev[lastIdx].role === 'user' && !prev[lastIdx].isFinal) {
-                    const updated = [...prev];
-                    updated[lastIdx] = { ...updated[lastIdx], text: data.text };
-                    return updated;
-                  }
-                  return [
-                    ...prev,
-                    {
-                      id: `user-${Date.now()}`,
-                      role: 'user',
-                      text: data.text,
-                      isFinal: false,
-                      timestamp: new Date(),
-                    },
-                  ];
-                } else if (data.role === 'user' && data.isFinal) {
-                  const filtered = prev.filter((m) => !(m.role === 'user' && !m.isFinal));
-                  return [
-                    ...filtered,
-                    {
-                      id: `user-${Date.now()}`,
-                      role: 'user',
-                      text: data.text,
-                      isFinal: true,
-                      timestamp: new Date(),
-                    },
-                  ];
-                } else if (data.role === 'agent') {
-                  return [
-                    ...prev,
-                    {
-                      id: `agent-${Date.now()}`,
-                      role: 'agent',
-                      text: data.text,
-                      isFinal: true,
-                      timestamp: new Date(),
-                    },
-                  ];
-                }
-                return prev;
-              });
-            } else if (data.type === 'error') {
-              console.error('Server error:', data.message);
-              setError(data.message);
+            const AudioCtx = getAudioContextClass();
+            if (!audioContextRef.current) {
+              audioContextRef.current = new AudioCtx();
+            }
+            const ctx = audioContextRef.current;
+            if (ctx.state === 'suspended') {
+              ctx.resume();
+            }
+
+            if (track.mediaStreamTrack) {
+              const ms = new MediaStream([track.mediaStreamTrack]);
+              const source = ctx.createMediaStreamSource(ms);
+              const analyser = ctx.createAnalyser();
+              analyser.fftSize = 256;
+              source.connect(analyser);
+              analyserRef.current = analyser;
             }
           } catch (e) {
-            console.error('Failed to parse WS text message:', e);
+            console.warn('[useVoiceSession] Could not setup analyser for agent audio track:', e);
           }
-        } else if (event.data instanceof ArrayBuffer) {
-          setAgentState('SPEAKING');
-          queueAudioChunk(event.data);
         }
-      };
+      });
 
-      ws.onerror = (e) => {
-        console.error('WebSocket connection error:', e);
-        setError('Connection failed. Make sure voice-server is running.');
-        setIsConnecting(false);
-      };
+      room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
+        console.log(`[useVoiceSession] Remote track unsubscribed: ${track.kind}`);
+        track.detach();
+        if (agentAudioElementRef.current) {
+          agentAudioElementRef.current = null;
+        }
+      });
 
-      ws.onclose = () => {
-        console.log('[voice-session] disconnected');
+      room.on(RoomEvent.DataReceived, (payload: Uint8Array, participant?: RemoteParticipant) => {
+        try {
+          const str = new TextDecoder().decode(payload);
+          const data = JSON.parse(str);
+
+          if (data.type === 'state') {
+            if (data.state === 'SPEAKING' && agentAudioElementRef.current) {
+              agentAudioElementRef.current.muted = false;
+              agentAudioElementRef.current.play().catch(() => {});
+            }
+            setAgentState(data.state);
+          } else if (data.type === 'barge_in') {
+            if (agentAudioElementRef.current) {
+              agentAudioElementRef.current.muted = true;
+              agentAudioElementRef.current.pause();
+            }
+            setAgentState('LISTENING');
+          } else if (data.type === 'transcript') {
+            setTranscripts((prev) => {
+              if (data.role === 'user' && !data.isFinal) {
+                const lastIdx = prev.length - 1;
+                if (lastIdx >= 0 && prev[lastIdx].role === 'user' && !prev[lastIdx].isFinal) {
+                  const updated = [...prev];
+                  updated[lastIdx] = { ...updated[lastIdx], text: data.text };
+                  return updated;
+                }
+                return [
+                  ...prev,
+                  {
+                    id: `user-${Date.now()}`,
+                    role: 'user',
+                    text: data.text,
+                    isFinal: false,
+                    timestamp: new Date(),
+                  },
+                ];
+              } else if (data.role === 'user' && data.isFinal) {
+                const filtered = prev.filter((m) => !(m.role === 'user' && !m.isFinal));
+                return [
+                  ...filtered,
+                  {
+                    id: `user-${Date.now()}`,
+                    role: 'user',
+                    text: data.text,
+                    isFinal: true,
+                    timestamp: new Date(),
+                  },
+                ];
+              } else if (data.role === 'agent') {
+                return [
+                  ...prev,
+                  {
+                    id: `agent-${Date.now()}`,
+                    role: 'agent',
+                    text: data.text,
+                    isFinal: true,
+                    timestamp: new Date(),
+                  },
+                ];
+              }
+              return prev;
+            });
+          } else if (data.type === 'error') {
+            console.error('Server error:', data.message);
+            setError(data.message);
+          }
+        } catch (e) {
+          console.error('[useVoiceSession] Error decoding DataChannel message:', e);
+        }
+      });
+
+      room.on(RoomEvent.Disconnected, () => {
+        console.log('[useVoiceSession] LiveKit Room disconnected');
         setIsConnected(false);
         setIsConnecting(false);
         setAgentState('IDLE');
-        stopAllPlayback();
-      };
+        setAudioLevel(0);
+      });
+
+      await room.connect(liveKitUrl, token);
+      console.log('[useVoiceSession] Connected to LiveKit Room');
+
+      // 4. Publish microphone track to LiveKit Room
+      await room.localParticipant.setMicrophoneEnabled(true, {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      });
+
+      setIsConnected(true);
+      setIsConnecting(false);
+      setAgentState('LISTENING');
     } catch (err: unknown) {
       const errorObj = err as { message?: string };
       console.error('Failed to start call:', err);
-      setError(errorObj.message || 'Microphone access denied or connection error');
+      setError(errorObj.message || 'Failed to start LiveKit voice call');
       setIsConnecting(false);
+      setIsConnected(false);
     }
-  }, [serverUrl, processMicAudio, queueAudioChunk, stopAllPlayback]);
+  }, [defaultRoomName]);
 
   const endCall = useCallback(() => {
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
+    if (roomRef.current) {
+      try {
+        roomRef.current.disconnect();
+      } catch {}
+      roomRef.current = null;
     }
 
-    if (scriptProcessorRef.current) {
+    if (agentAudioElementRef.current) {
       try {
-        scriptProcessorRef.current.disconnect();
+        agentAudioElementRef.current.pause();
+        agentAudioElementRef.current.srcObject = null;
       } catch {}
-      scriptProcessorRef.current = null;
+      agentAudioElementRef.current = null;
     }
 
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
     }
+    setActiveMediaStream(null);
 
     if (audioContextRef.current) {
       audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
     }
-
-    stopAllPlayback();
-
-    if (playbackContextRef.current) {
-      playbackContextRef.current.close().catch(() => {});
-      playbackContextRef.current = null;
-    }
+    analyserRef.current = null;
 
     setIsConnected(false);
     setIsConnecting(false);
     setAgentState('IDLE');
     setAudioLevel(0);
     setHasMic(false);
-  }, [stopAllPlayback]);
+  }, []);
 
   const toggleMute = useCallback(() => {
-    setIsMuted((prev) => !prev);
+    setIsMuted((prev) => {
+      const next = !prev;
+      if (roomRef.current?.localParticipant) {
+        roomRef.current.localParticipant.setMicrophoneEnabled(!next).catch(() => {});
+      }
+      return next;
+    });
   }, []);
 
   const interrupt = useCallback(() => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'interrupt' }));
-    }
-    stopAllPlayback();
-    setAgentState('LISTENING');
-  }, [stopAllPlayback]);
+    handleLocalBargeIn();
+  }, [handleLocalBargeIn]);
 
   const sendTextMessage = useCallback((text: string) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && text.trim()) {
-      wsRef.current.send(JSON.stringify({ type: 'text_input', text: text.trim() }));
+    if (roomRef.current?.localParticipant && text.trim()) {
+      try {
+        const payload = new TextEncoder().encode(
+          JSON.stringify({ type: 'text_input', text: text.trim() })
+        );
+        roomRef.current.localParticipant.publishData(payload, { reliable: true }).catch(() => {});
+      } catch (e) {
+        console.error('Failed to send text input:', e);
+      }
     }
   }, []);
 
@@ -491,6 +459,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     isConnected,
     isConnecting,
     isMuted,
+    isSpeechActive,
     hasMic,
     micPermission,
     requestMicPermission,
@@ -505,4 +474,3 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     sendTextMessage,
   };
 }
-

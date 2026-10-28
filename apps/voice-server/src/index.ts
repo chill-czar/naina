@@ -4,6 +4,7 @@ import { AccessToken } from 'livekit-server-sdk';
 import { config } from './config';
 import { VoiceOrchestrator } from './pipeline/orchestrator';
 import { checkAvailability } from '@naina/hotel-pms-core';
+import { liveKitAgentManager } from './pipeline/livekit-agent';
 
 const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -60,6 +61,12 @@ const server = http.createServer(async (req, res) => {
         });
 
         const token = await at.toJwt();
+
+        // Proactively start the LiveKit voice agent in this room
+        liveKitAgentManager.getOrCreateAgent(roomName).catch((err) => {
+          console.error(`[index] Failed to start LiveKit agent for room ${roomName}:`, err);
+        });
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({

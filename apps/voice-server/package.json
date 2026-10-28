@@ -15,6 +15,7 @@
   "dependencies": {
     "@cartesia/cartesia-js": "^4.2.0",
     "@google/genai": "^2.31.0",
+    "@livekit/rtc-node": "^1.2.1",
     "@naina/hotel-pms-core": "workspace:*",
     "@naina/shared-types": "workspace:*",
     "dotenv": "^16.4.7",
