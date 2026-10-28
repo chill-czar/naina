@@ -7,7 +7,7 @@ export interface UseSileroVADOptions {
   enabled?: boolean;
   stream?: MediaStream | null;
   onSpeechStart?: () => void;
-  onSpeechEnd?: (audio: Float32Array) => void;
+  onSpeechEnd?: (audio: Float32Array, timestamp: number) => void;
   onVADMisfire?: () => void;
   positiveSpeechThreshold?: number;
   negativeSpeechThreshold?: number;
@@ -66,8 +66,9 @@ export function useSileroVAD({
               callbacksRef.current.onSpeechStart?.();
             },
             onSpeechEnd: (audio: Float32Array) => {
+              const speechEndTimestamp = performance.now();
               setIsSpeechActive(false);
-              callbacksRef.current.onSpeechEnd?.(audio);
+              callbacksRef.current.onSpeechEnd?.(audio, speechEndTimestamp);
             },
             onVADMisfire: () => {
               setIsSpeechActive(false);

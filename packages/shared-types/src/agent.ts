@@ -1,12 +1,35 @@
 export type AgentState = 'IDLE' | 'LISTENING' | 'THINKING' | 'SPEAKING';
 
-export interface TurnMetrics {
+export interface ServerTurnMetricsPacket {
+  type: 'turn_telemetry';
   turnId: string;
-  userSpeechDurationMs?: number;
-  sttLatencyMs?: number;
-  llmTimeFirstTokenMs?: number;
-  ttsTimeFirstByteMs?: number;
-  totalTurnLatencyMs?: number;
+  sttLatencyMs: number;
+  toolExecutionMs: number;
+  toolName?: string;
+  llmTtftMs: number;
+  llmTotalMs: number;
+  ttsTtfbMs: number;
+}
+
+export interface TurnTelemetry {
+  turnId: string;
+  timestamp: string;
+  userTranscript: string;
+  agentTranscript: string;
+  toolCalls?: Array<{
+    name: string;
+    args: Record<string, any>;
+    durationMs: number;
+  }>;
+  metrics: {
+    vadEndpointingMs?: number;
+    sttLatencyMs: number;
+    toolExecutionMs: number;
+    llmTtftMs: number;
+    ttsTtfbMs: number;
+    networkAndPlayoutMs: number;
+    totalE2EMs: number;
+  };
 }
 
 export interface ConversationMessage {

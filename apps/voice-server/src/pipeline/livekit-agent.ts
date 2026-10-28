@@ -92,6 +92,13 @@ export class LiveKitVoiceAgent {
       this.broadcastData({ type: 'state', state: 'LISTENING' });
     });
 
+    this.orchestrator.on('turnMetrics', (metricsPacket: any, toolCalls: any) => {
+      this.broadcastData({
+        ...metricsPacket,
+        toolCalls,
+      });
+    });
+
     this.orchestrator.on('error', (err) => {
       this.broadcastData({ type: 'error', message: err.message || 'Pipeline error' });
     });

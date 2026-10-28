@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Room, RoomEvent, Track, RemoteTrack, RemoteParticipant } from 'livekit-client';
-import type { AgentState } from '@naina/shared-types';
+import type { AgentState, TurnTelemetry } from '@naina/shared-types';
 import { useSileroVAD } from './use-silero-vad';
 
 export interface TranscriptMessage {
@@ -46,6 +46,10 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
   const [micPermission, setMicPermission] = useState<MicPermissionStatus>('checking');
   const [activeMediaStream, setActiveMediaStream] = useState<MediaStream | null>(null);
 
+  // Latency Telemetry State
+  const [latestLatency, setLatestLatency] = useState<number | null>(null);
+  const [turnHistory, setTurnHistory] = useState<TurnTelemetry[]>([]);
+
   const roomRef = useRef<Room | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const agentAudioElementRef = useRef<HTMLAudioElement | null>(null);
@@ -53,9 +57,102 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const isMutedRef = useRef(isMuted);
 
+  // Turn timing refs for accurate End-to-End calculation
+  const lastSpeechEndTimestampRef = useRef<number | null>(null);
+  const hasRecordedPlayoutForCurrentTurnRef = useRef<boolean>(false);
+  const latestLatencyRef = useRef<number | null>(null);
+  const pendingServerMetricsRef = useRef<any>(null);
+  const latestUserTranscriptRef = useRef<string>('');
+  const latestAgentTranscriptRef = useRef<string>('');
+
+  const agentStateRef = useRef<AgentState>(agentState);
+  useEffect(() => {
+    agentStateRef.current = agentState;
+  }, [agentState]);
+
   useEffect(() => {
     isMutedRef.current = isMuted;
   }, [isMuted]);
+
+  // Load telemetry logs from localStorage on mount
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const saved = localStorage.getItem('naina_session_telemetry');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setTurnHistory(parsed);
+            setLatestLatency(parsed[0]?.metrics?.totalE2EMs || null);
+            latestLatencyRef.current = parsed[0]?.metrics?.totalE2EMs || null;
+          }
+        }
+      }
+    } catch {}
+  }, []);
+
+  // Finalize Turn Telemetry Record combining client playout and server milestones
+  const tryFinalizeTurn = useCallback((measuredE2E?: number) => {
+    const e2e = measuredE2E ?? latestLatencyRef.current;
+    const serverMetrics = pendingServerMetricsRef.current;
+    if (!e2e || !serverMetrics) return;
+
+    const pipelineServerMs =
+      serverMetrics.sttLatencyMs +
+      serverMetrics.toolExecutionMs +
+      serverMetrics.llmTtftMs +
+      serverMetrics.ttsTtfbMs;
+    const networkAndPlayoutMs = Math.max(0, e2e - pipelineServerMs);
+
+    const turnRecord: TurnTelemetry = {
+      turnId: serverMetrics.turnId,
+      timestamp: new Date().toISOString(),
+      userTranscript: latestUserTranscriptRef.current || 'Voice input',
+      agentTranscript: latestAgentTranscriptRef.current || '',
+      toolCalls: serverMetrics.toolCalls,
+      metrics: {
+        vadEndpointingMs: 250, // configured Silero silence window
+        sttLatencyMs: serverMetrics.sttLatencyMs,
+        toolExecutionMs: serverMetrics.toolExecutionMs,
+        llmTtftMs: serverMetrics.llmTtftMs,
+        ttsTtfbMs: serverMetrics.ttsTtfbMs,
+        networkAndPlayoutMs,
+        totalE2EMs: e2e,
+      },
+    };
+
+    setTurnHistory((prev) => {
+      const exists = prev.some((t) => t.turnId === turnRecord.turnId);
+      const updated = exists
+        ? prev.map((t) => (t.turnId === turnRecord.turnId ? turnRecord : t))
+        : [turnRecord, ...prev].slice(0, 50);
+
+      try {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('naina_session_telemetry', JSON.stringify(updated));
+        }
+      } catch {}
+
+      return updated;
+    });
+
+    pendingServerMetricsRef.current = null;
+  }, []);
+
+  const recordAudioPlayout = useCallback(() => {
+    if (
+      lastSpeechEndTimestampRef.current !== null &&
+      !hasRecordedPlayoutForCurrentTurnRef.current
+    ) {
+      hasRecordedPlayoutForCurrentTurnRef.current = true;
+      const playoutTime = performance.now();
+      const measuredE2E = Math.round(playoutTime - lastSpeechEndTimestampRef.current);
+      setLatestLatency(measuredE2E);
+      latestLatencyRef.current = measuredE2E;
+      console.log(`[latency] True User-Perceived E2E Turn Latency: ${measuredE2E}ms`);
+      tryFinalizeTurn(measuredE2E);
+    }
+  }, [tryFinalizeTurn]);
 
   // Handle instant local barge-in (<10ms) from Silero VAD
   const handleLocalBargeIn = useCallback(() => {
@@ -79,14 +176,29 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     }
   }, []);
 
-  // Initialize Client-Side Silero VAD hook
+  // Initialize Client-Side Silero VAD hook with protected speech-end timing
   const { isSpeechActive } = useSileroVAD({
     enabled: isConnected && !isMuted,
     stream: activeMediaStream,
     positiveSpeechThreshold: 0.6,
     negativeSpeechThreshold: 0.4,
     minSpeechFrames: 3,
-    onSpeechStart: handleLocalBargeIn,
+    onSpeechStart: () => {
+      if (agentStateRef.current === 'SPEAKING') {
+        handleLocalBargeIn();
+      } else if (agentStateRef.current === 'LISTENING') {
+        hasRecordedPlayoutForCurrentTurnRef.current = false;
+      }
+    },
+    onSpeechEnd: (_audio, timestamp) => {
+      // ONLY update speech-end timestamp when agent is LISTENING or IDLE.
+      // NEVER allow background noises/breaths during THINKING or SPEAKING to corrupt turn start!
+      if (agentStateRef.current === 'LISTENING' || agentStateRef.current === 'IDLE') {
+        lastSpeechEndTimestampRef.current = timestamp;
+        hasRecordedPlayoutForCurrentTurnRef.current = false;
+        pendingServerMetricsRef.current = null;
+      }
+    },
   });
 
   const requestMicPermission = useCallback(async (): Promise<boolean> => {
@@ -157,13 +269,13 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     };
   }, [requestMicPermission]);
 
-  // Audio level analyser loop for VoiceOrb mouth animations
+  // Audio level analyser loop for VoiceOrb animations & real acoustic playout detection
   useEffect(() => {
     let animId: number;
     const dataArray = new Uint8Array(128);
 
     function checkLevel() {
-      if (analyserRef.current && agentState === 'SPEAKING') {
+      if (analyserRef.current && (agentState === 'SPEAKING' || agentState === 'THINKING')) {
         analyserRef.current.getByteTimeDomainData(dataArray);
         let sumSq = 0;
         for (let i = 0; i < dataArray.length; i++) {
@@ -172,6 +284,15 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
         }
         const rms = Math.sqrt(sumSq / dataArray.length);
         setAudioLevel((prev) => Math.max(prev * 0.7, Math.min(1, rms * 4)));
+
+        // TRUE ACOUSTIC PLAYOUT: Sound wave physically decoded and entering speaker pipeline
+        if (
+          rms > 0.012 &&
+          !hasRecordedPlayoutForCurrentTurnRef.current &&
+          lastSpeechEndTimestampRef.current !== null
+        ) {
+          recordAudioPlayout();
+        }
       } else {
         setAudioLevel((prev) => (prev > 0.01 ? prev * 0.8 : 0));
       }
@@ -180,7 +301,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
 
     animId = requestAnimationFrame(checkLevel);
     return () => cancelAnimationFrame(animId);
-  }, [agentState]);
+  }, [agentState, recordAudioPlayout]);
 
   const startCall = useCallback(async () => {
     try {
@@ -253,6 +374,11 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
           audioElement.autoplay = true;
           agentAudioElementRef.current = audioElement;
 
+          // Listen for true acoustic playout
+          audioElement.addEventListener('playing', () => {
+            recordAudioPlayout();
+          });
+
           // Attach Web Audio Analyser for VoiceOrb mouth movement
           try {
             const AudioCtx = getAudioContextClass();
@@ -295,6 +421,12 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
             if (data.state === 'SPEAKING' && agentAudioElementRef.current) {
               agentAudioElementRef.current.muted = false;
               agentAudioElementRef.current.play().catch(() => {});
+              // Graceful fallback if AnalyserNode is muted or below RMS threshold
+              setTimeout(() => {
+                if (!hasRecordedPlayoutForCurrentTurnRef.current) {
+                  recordAudioPlayout();
+                }
+              }, 350);
             }
             setAgentState(data.state);
           } else if (data.type === 'barge_in') {
@@ -303,7 +435,19 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
               agentAudioElementRef.current.pause();
             }
             setAgentState('LISTENING');
+          } else if (data.type === 'turn_telemetry') {
+            console.log('[latency] Server turn telemetry received:', data);
+            pendingServerMetricsRef.current = data;
+            if (hasRecordedPlayoutForCurrentTurnRef.current) {
+              tryFinalizeTurn();
+            }
           } else if (data.type === 'transcript') {
+            if (data.role === 'user' && data.isFinal) {
+              latestUserTranscriptRef.current = data.text;
+            } else if (data.role === 'agent') {
+              latestAgentTranscriptRef.current = data.text;
+            }
+
             setTranscripts((prev) => {
               if (data.role === 'user' && !data.isFinal) {
                 const lastIdx = prev.length - 1;
@@ -385,7 +529,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
       setIsConnecting(false);
       setIsConnected(false);
     }
-  }, [defaultRoomName]);
+  }, [defaultRoomName, recordAudioPlayout, tryFinalizeTurn]);
 
   const endCall = useCallback(() => {
     if (roomRef.current) {
@@ -439,6 +583,11 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
   const sendTextMessage = useCallback((text: string) => {
     if (roomRef.current?.localParticipant && text.trim()) {
       try {
+        lastSpeechEndTimestampRef.current = performance.now();
+        hasRecordedPlayoutForCurrentTurnRef.current = false;
+        pendingServerMetricsRef.current = null;
+        latestUserTranscriptRef.current = text.trim();
+
         const payload = new TextEncoder().encode(
           JSON.stringify({ type: 'text_input', text: text.trim() })
         );
@@ -448,6 +597,32 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
       }
     }
   }, []);
+
+  const clearTurnHistory = useCallback(() => {
+    setTurnHistory([]);
+    setLatestLatency(null);
+    latestLatencyRef.current = null;
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('naina_session_telemetry');
+      }
+    } catch {}
+  }, []);
+
+  const exportTurnHistory = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const dataStr =
+      'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(turnHistory, null, 2));
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute('href', dataStr);
+    downloadAnchor.setAttribute(
+      'download',
+      `naina-telemetry-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+    );
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+  }, [turnHistory]);
 
   useEffect(() => {
     return () => {
@@ -472,5 +647,10 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     toggleMute,
     interrupt,
     sendTextMessage,
+    // Telemetry & Latency HUD
+    latestLatency,
+    turnHistory,
+    clearTurnHistory,
+    exportTurnHistory,
   };
 }

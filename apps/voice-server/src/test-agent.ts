@@ -12,7 +12,7 @@ async function test() {
   for (const p of prompts) {
     console.log(`\nGuest: "${p}"`);
     const reply = await agent.processUserMessage(p);
-    console.log(`Naina: "${reply}"`);
+    console.log(`Naina: "${reply.text}"`);
   }
 }
 

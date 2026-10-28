@@ -17,7 +17,8 @@
     "db:studio": "pnpm --filter @naina/hotel-pms-core db:studio",
     "test:agent": "pnpm --filter @naina/voice-server test:agent",
     "test:tts": "pnpm --filter @naina/voice-server test:tts",
-    "test:orchestrator": "pnpm --filter @naina/voice-server test:orchestrator"
+    "test:orchestrator": "pnpm --filter @naina/voice-server test:orchestrator",
+    "test:telemetry": "pnpm --filter @naina/voice-server test:telemetry"
   },
   "devDependencies": {
     "turbo": "^2.4.4",

@@ -73,6 +73,7 @@ export function createSTTStream(sampleRate = 16000) {
     model: config.cartesia.sttModel,
     encoding: 'pcm_s16le',
     sample_rate: sampleRate,
+    turn_end_timeout_ms: 800,
   });
 }
 

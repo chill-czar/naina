@@ -5,8 +5,9 @@ import { useVoiceSession } from '../hooks/use-voice-session';
 import { VoiceOrb } from '../components/voice-orb';
 import { Captions } from '../components/captions';
 import { TranscriptDrawer } from '../components/transcript-drawer';
+import { LatencyHUDDrawer } from '../components/latency-hud-drawer';
 import { DebugOverlay } from '../components/debug-overlay';
-import { MessageSquare, FileText, Send, X, PhoneOff } from 'lucide-react';
+import { MessageSquare, FileText, Send, X, PhoneOff, Zap } from 'lucide-react';
 
 export default function Home() {
   const {
@@ -21,9 +22,14 @@ export default function Home() {
     endCall,
     interrupt,
     sendTextMessage,
+    latestLatency,
+    turnHistory,
+    clearTurnHistory,
+    exportTurnHistory,
   } = useVoiceSession();
 
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [isLatencyDrawerOpen, setIsLatencyDrawerOpen] = useState(false);
   const [showTypeInput, setShowTypeInput] = useState(false);
   const [typedMessage, setTypedMessage] = useState('');
 
@@ -72,7 +78,25 @@ export default function Home() {
   return (
     <div className="relative w-screen h-screen overflow-hidden pearl-background flex flex-col justify-between select-none">
       <header className="relative z-10 w-full pt-10 px-8 flex items-center justify-between pointer-events-none">
-        <div className="w-6" />
+        <div className="flex items-center gap-2 pointer-events-auto">
+          <button
+            type="button"
+            onClick={() => setIsLatencyDrawerOpen(true)}
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-semibold shadow-xs transition-all cursor-pointer ${
+              latestLatency
+                ? latestLatency <= 800
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                  : latestLatency <= 1200
+                  ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                  : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                : 'bg-white/80 text-[#8a8699] border-[#e2def0] hover:text-[#1e1b2b]'
+            }`}
+            title="Inspect Latency & Pipeline Telemetry"
+          >
+            <Zap className="w-3.5 h-3.5 fill-current" />
+            <span>{latestLatency ? `${latestLatency}ms` : 'Latency HUD'}</span>
+          </button>
+        </div>
 
         <div className="flex items-center justify-end w-6">
           <div
@@ -231,6 +255,15 @@ export default function Home() {
         isOpen={isDrawerOpen}
         onClose={() => setIsDrawerOpen(false)}
         messages={transcripts}
+      />
+
+      <LatencyHUDDrawer
+        isOpen={isLatencyDrawerOpen}
+        onClose={() => setIsLatencyDrawerOpen(false)}
+        turns={turnHistory}
+        latestLatency={latestLatency}
+        onClear={clearTurnHistory}
+        onExport={exportTurnHistory}
       />
 
       <DebugOverlay

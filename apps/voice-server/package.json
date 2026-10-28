@@ -9,6 +9,7 @@
     "test:agent": "tsx src/test-agent.ts",
     "test:tts": "tsx src/test-tts.ts",
     "test:orchestrator": "tsx src/test-orchestrator.ts",
+    "test:telemetry": "tsx src/test-telemetry.ts",
     "build": "tsc",
     "check-types": "tsc --noEmit"
   },

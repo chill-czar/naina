@@ -115,6 +115,16 @@ async function executeTool(name: string, args: Record<string, any>): Promise<any
   }
 }
 
+export interface AgentResponseResult {
+  text: string;
+  toolCalls: Array<{
+    name: string;
+    args: Record<string, any>;
+    durationMs: number;
+  }>;
+  totalToolDurationMs: number;
+}
+
 export class NainaAgent {
   private chatSession: any;
 
@@ -129,13 +139,25 @@ export class NainaAgent {
     });
   }
 
-  async processUserMessage(userTranscript: string): Promise<string> {
+  async processUserMessage(userTranscript: string): Promise<AgentResponseResult> {
+    const toolCalls: Array<{ name: string; args: Record<string, any>; durationMs: number }> = [];
+    let totalToolDurationMs = 0;
+
     let response = await this.chatSession.sendMessage({ message: userTranscript });
 
     while (response.functionCalls && response.functionCalls.length > 0) {
       const functionResponses = [];
       for (const call of response.functionCalls) {
+        const tStart = performance.now();
         const toolResult = await executeTool(call.name, call.args);
+        const duration = Math.round(performance.now() - tStart);
+        toolCalls.push({
+          name: call.name,
+          args: call.args,
+          durationMs: duration,
+        });
+        totalToolDurationMs += duration;
+
         functionResponses.push({
           functionResponse: {
             name: call.name,
@@ -149,7 +171,11 @@ export class NainaAgent {
       });
     }
 
-    return response.text || '';
+    return {
+      text: response.text || '',
+      toolCalls,
+      totalToolDurationMs,
+    };
   }
 }
 
