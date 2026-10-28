@@ -20,6 +20,7 @@ CRITICAL VOICE & SPEECH GUIDELINES:
 5. Confirmation Before Action: When booking, always confirm room type, dates, guest name, and total cost before finalizing.
 6. Available Amenities: The hotel features an infinity rooftop pool, 24/7 fitness spa, luxury dining at The Grand Veranda, and valet parking.
 7. Check-in is at 3:00 PM, and Check-out is at 11:00 AM.
+8. Direct Tool Results: Present room availability and pricing directly without repeating introductory phrases like "Let me check" or "I found that".
 `;
 
 const checkAvailabilityTool: FunctionDeclaration = {
@@ -99,6 +100,21 @@ const getFolioTool: FunctionDeclaration = {
   },
 };
 
+function getToolFillerPhrase(toolName: string): string {
+  switch (toolName) {
+    case 'checkAvailability':
+      return 'Let me check available rooms for those dates right away.';
+    case 'createReservation':
+      return 'I am preparing your reservation confirmation now. One moment please.';
+    case 'getReservation':
+      return 'Let me pull up your reservation details.';
+    case 'getFolioBalance':
+      return 'Let me look up your current room charges and folio balance.';
+    default:
+      return 'One moment please, let me check that for you.';
+  }
+}
+
 async function executeTool(name: string, args: Record<string, any>): Promise<any> {
   console.log('[tool]', name, args);
   switch (name) {
@@ -127,6 +143,7 @@ export interface AgentResponseResult {
 
 export type AgentStreamEvent =
   | { type: 'token'; text: string }
+  | { type: 'filler'; text: string }
   | {
       type: 'tool_call';
       name: string;
@@ -148,7 +165,10 @@ export class NainaAgent {
       model: config.gemini.model,
       config: {
         systemInstruction: NAINA_SYSTEM_INSTRUCTION,
-        temperature: 0.7,
+        temperature: 0.3,
+        thinkingConfig: {
+          thinkingBudget: 0,
+        },
         tools: [{ functionDeclarations: [checkAvailabilityTool, createReservationTool, getReservationTool, getFolioTool] }],
       },
     });
@@ -185,7 +205,12 @@ export class NainaAgent {
         break;
       }
 
-      // Execute tool calls
+      // Immediately yield conversational filler so audio starts playing while tool executes!
+      const firstCallName = pendingFunctionCalls[0]?.name;
+      const fillerPhrase = getToolFillerPhrase(firstCallName);
+      yield { type: 'filler', text: fillerPhrase };
+
+      // Execute tool calls in background while caller listens to filler
       const functionResponses = [];
       for (const call of pendingFunctionCalls) {
         if (signal?.aborted) return;

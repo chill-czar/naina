@@ -201,7 +201,16 @@ export class VoiceOrchestrator extends EventEmitter {
     const agentPumpPromise = (async () => {
       try {
         for await (const event of this.agent.processUserMessageStream(transcript)) {
-          if (event.type === 'token') {
+          if (event.type === 'filler') {
+            if (!tLlmToken1) {
+              tLlmToken1 = performance.now();
+              console.log(
+                `[agent filler] Emitted filler phrase in ${Math.round(tLlmToken1 - tTurnStart)}ms`
+              );
+            }
+            fullAgentTranscript += event.text + ' ';
+            tokenQueue.push(event.text + ' ');
+          } else if (event.type === 'token') {
             if (!tLlmToken1) {
               tLlmToken1 = performance.now();
               console.log(
