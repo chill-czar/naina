@@ -8,8 +8,9 @@ dist/
 out/
 build/
 
-# Turborepo cache
+# Turborepo & Wrangler cache
 .turbo/
+.wrangler/
 
 # Environment files
 .env

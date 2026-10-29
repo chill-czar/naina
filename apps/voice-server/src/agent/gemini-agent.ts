@@ -9,42 +9,25 @@ import {
 
 const ai = new GoogleGenAI({ apiKey: config.gemini.apiKey });
 
-export const NAINA_SYSTEM_INSTRUCTION = `
-You are "Naina", the warm, professional, and efficient virtual front-desk concierge for The Grand Naina Luxury Hotel & Residences.
-
-CRITICAL VOICE & SPEECH GUIDELINES:
-1. Natural Spoken Dialogue: You are speaking aloud over a phone/voice call, NOT writing in a text chat.
-2. No Markdown Formatting: NEVER use asterisks (*), markdown lists, bullet points, headers, or markdown tables.
-3. Natural Numbers & Currency: Always speak prices naturally (e.g. say "one hundred and eighty-nine dollars", NOT "$189.00").
-4. Concise & Conversational: Keep responses under 2 to 3 sentences whenever possible. Do not overwhelm the caller.
-5. Confirmation Before Action: When booking, always confirm room type, dates, guest name, and total cost before finalizing.
-6. Available Amenities: The hotel features an infinity rooftop pool, 24/7 fitness spa, luxury dining at The Grand Veranda, and valet parking.
-7. Check-in is at 3:00 PM, and Check-out is at 11:00 AM.
-8. Direct Tool Results: Present room availability and pricing directly without repeating introductory phrases like "Let me check" or "I found that".
-`;
+export const NAINA_SYSTEM_INSTRUCTION = `You are "Naina", front-desk concierge for The Grand Naina Luxury Hotel.
+RULES:
+1. Spoken voice dialogue only: NEVER use asterisks (*), markdown formatting, bullets, or tables.
+2. Currency: Speak naturally (e.g. say "one hundred eighty-nine dollars").
+3. Concise: 1 to 2 sentences per turn. Never overwhelm caller.
+4. Booking: Confirm room type, dates, guest name, and total cost before finalizing.
+5. Check-in is at 3:00 PM, Check-out is at 11:00 AM.
+6. Present tool results directly without repeating introductory chatter.`;
 
 const checkAvailabilityTool: FunctionDeclaration = {
   name: 'checkAvailability',
-  description: 'Check available room types, pricing, and counts for specific dates.',
+  description: 'Check available rooms, pricing, and counts for dates.',
   parameters: {
     type: Type.OBJECT,
     properties: {
-      checkInDate: {
-        type: Type.STRING,
-        description: 'Check-in date in YYYY-MM-DD format (e.g. 2026-11-01)',
-      },
-      checkOutDate: {
-        type: Type.STRING,
-        description: 'Check-out date in YYYY-MM-DD format (e.g. 2026-11-03)',
-      },
-      numberOfGuests: {
-        type: Type.INTEGER,
-        description: 'Number of guests staying',
-      },
-      roomTypeCode: {
-        type: Type.STRING,
-        description: 'Optional filter: DELUXE_KING, EXECUTIVE_SUITE, or STANDARD_QUEEN',
-      },
+      checkInDate: { type: Type.STRING, description: 'YYYY-MM-DD' },
+      checkOutDate: { type: Type.STRING, description: 'YYYY-MM-DD' },
+      numberOfGuests: { type: Type.INTEGER, description: 'Guest count' },
+      roomTypeCode: { type: Type.STRING, description: 'DELUXE_KING, EXECUTIVE_SUITE, or STANDARD_QUEEN' },
     },
     required: ['checkInDate', 'checkOutDate'],
   },
@@ -52,19 +35,19 @@ const checkAvailabilityTool: FunctionDeclaration = {
 
 const createReservationTool: FunctionDeclaration = {
   name: 'createReservation',
-  description: 'Create a confirmed room reservation and generate a booking reference code.',
+  description: 'Create confirmed room booking.',
   parameters: {
     type: Type.OBJECT,
     properties: {
-      firstName: { type: Type.STRING, description: 'Guest first name' },
-      lastName: { type: Type.STRING, description: 'Guest last name' },
-      email: { type: Type.STRING, description: 'Guest email address' },
-      phone: { type: Type.STRING, description: 'Guest contact phone number' },
-      roomTypeId: { type: Type.STRING, description: 'The UUID of the selected room type' },
-      checkInDate: { type: Type.STRING, description: 'Check-in date in YYYY-MM-DD format' },
-      checkOutDate: { type: Type.STRING, description: 'Check-out date in YYYY-MM-DD format' },
-      numberOfGuests: { type: Type.INTEGER, description: 'Number of guests' },
-      specialRequests: { type: Type.STRING, description: 'Optional special requests' },
+      firstName: { type: Type.STRING, description: 'First name' },
+      lastName: { type: Type.STRING, description: 'Last name' },
+      email: { type: Type.STRING, description: 'Email' },
+      phone: { type: Type.STRING, description: 'Phone' },
+      roomTypeId: { type: Type.STRING, description: 'Room type UUID' },
+      checkInDate: { type: Type.STRING, description: 'YYYY-MM-DD' },
+      checkOutDate: { type: Type.STRING, description: 'YYYY-MM-DD' },
+      numberOfGuests: { type: Type.INTEGER, description: 'Guest count' },
+      specialRequests: { type: Type.STRING, description: 'Requests' },
     },
     required: ['firstName', 'lastName', 'email', 'phone', 'roomTypeId', 'checkInDate', 'checkOutDate'],
   },
@@ -72,14 +55,11 @@ const createReservationTool: FunctionDeclaration = {
 
 const getReservationTool: FunctionDeclaration = {
   name: 'getReservation',
-  description: 'Lookup an existing reservation by booking reference code (e.g. NAINA-1234).',
+  description: 'Lookup existing reservation by booking reference (e.g. NAINA-1234).',
   parameters: {
     type: Type.OBJECT,
     properties: {
-      bookingReference: {
-        type: Type.STRING,
-        description: 'Booking reference code',
-      },
+      bookingReference: { type: Type.STRING, description: 'Booking code' },
     },
     required: ['bookingReference'],
   },
@@ -87,14 +67,11 @@ const getReservationTool: FunctionDeclaration = {
 
 const getFolioTool: FunctionDeclaration = {
   name: 'getFolioBalance',
-  description: 'Get current billing folio, charges, and outstanding balance for a room number.',
+  description: 'Get current billing folio and balance for a room number.',
   parameters: {
     type: Type.OBJECT,
     properties: {
-      roomNumber: {
-        type: Type.STRING,
-        description: 'The guest room number (e.g. 101, 201, 301)',
-      },
+      roomNumber: { type: Type.STRING, description: 'Room number (e.g. 101)' },
     },
     required: ['roomNumber'],
   },
@@ -160,9 +137,10 @@ export type AgentStreamEvent =
 export class NainaAgent {
   private chatSession: any;
 
-  constructor() {
+  constructor(initialHistory?: any[]) {
     this.chatSession = ai.chats.create({
       model: config.gemini.model,
+      history: initialHistory && initialHistory.length > 0 ? initialHistory : undefined,
       config: {
         systemInstruction: NAINA_SYSTEM_INSTRUCTION,
         temperature: 0.3,
@@ -172,6 +150,14 @@ export class NainaAgent {
         tools: [{ functionDeclarations: [checkAvailabilityTool, createReservationTool, getReservationTool, getFolioTool] }],
       },
     });
+  }
+
+  public async getHistory(): Promise<any[]> {
+    try {
+      return await this.chatSession.getHistory();
+    } catch {
+      return [];
+    }
   }
 
   async *processUserMessageStream(

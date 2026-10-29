@@ -1,204 +1,203 @@
-import http from 'http';
-import { WebSocketServer, WebSocket } from 'ws';
+import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+import { serve } from '@hono/node-server';
 import { AccessToken } from 'livekit-server-sdk';
 import { config } from './config';
-import { VoiceOrchestrator } from './pipeline/orchestrator';
-import { checkAvailability } from '@naina/hotel-pms-core';
+import {
+  checkAvailability,
+  getCallSession,
+  saveCallSession,
+  createRoomHold,
+} from '@naina/hotel-pms-core';
 import { liveKitAgentManager } from './pipeline/livekit-agent';
 import { getHistoricalTurnLogs } from './pipeline/telemetry-logger';
 
-const server = http.createServer(async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+export const app = new Hono();
 
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
+// Global CORS Middleware
+app.use(
+  '*',
+  cors({
+    origin: '*',
+    allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization'],
+  })
+);
 
-  const url = new URL(req.url || '/', `http://${req.headers.host}`);
+// Health Checks
+const healthHandler = (c: any) => {
+  return c.json({
+    status: 'ok',
+    service: 'Naina Voice Server (Hono)',
+    runtime: 'Node.js / Hono Engine',
+    geminiModel: config.gemini.model,
+    cartesiaTts: config.cartesia.ttsModel,
+    cartesiaStt: config.cartesia.sttModel,
+    activeAgents: 'ready',
+    timestamp: new Date().toISOString(),
+  });
+};
 
-  if (url.pathname === '/health' || url.pathname === '/api/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(
-      JSON.stringify({
-        status: 'ok',
-        service: 'Naina Voice Server',
-        geminiModel: config.gemini.model,
-        cartesiaTts: config.cartesia.ttsModel,
-        cartesiaStt: config.cartesia.sttModel,
-      })
-    );
-    return;
-  }
+app.get('/health', healthHandler);
+app.get('/api/health', healthHandler);
 
-  if (url.pathname === '/api/token' && req.method === 'POST') {
-    let body = '';
-    req.on('data', (chunk) => (body += chunk));
-    req.on('end', async () => {
-      try {
-        const data = body ? JSON.parse(body) : {};
-        const roomName = data.roomName || 'naina-concierge-room';
-        const participantName = data.participantName || `guest-${Math.floor(1000 + Math.random() * 9000)}`;
+// LiveKit Token & Agent Worker Dispatch Endpoint
+app.post('/api/token', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const roomName = body.roomName || 'naina-concierge-room';
+    const participantName =
+      body.participantName || `guest-${Math.floor(1000 + Math.random() * 9000)}`;
 
-        if (!config.livekit.apiKey || !config.livekit.apiSecret) {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'LiveKit API credentials not configured in .env' }));
-          return;
-        }
+    if (!config.livekit.apiKey || !config.livekit.apiSecret) {
+      return c.json(
+        { error: 'LiveKit API credentials not configured in environment variables' },
+        500
+      );
+    }
 
-        const at = new AccessToken(config.livekit.apiKey, config.livekit.apiSecret, {
-          identity: participantName,
-          name: participantName,
-        });
-
-        at.addGrant({
-          roomJoin: true,
-          room: roomName,
-          canPublish: true,
-          canSubscribe: true,
-        });
-
-        const token = await at.toJwt();
-
-        // Proactively start the LiveKit voice agent in this room
-        liveKitAgentManager.getOrCreateAgent(roomName).catch((err) => {
-          console.error(`[index] Failed to start LiveKit agent for room ${roomName}:`, err);
-        });
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(
-          JSON.stringify({
-            token,
-            url: config.livekit.url,
-            roomName,
-            participantName,
-          })
-        );
-      } catch (err: any) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: err.message }));
-      }
+    const at = new AccessToken(config.livekit.apiKey, config.livekit.apiSecret, {
+      identity: participantName,
+      name: participantName,
     });
-    return;
-  }
 
-  if (url.pathname === '/api/rooms') {
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
-      const rooms = await checkAvailability({
-        checkInDate: url.searchParams.get('checkInDate') || today,
-        checkOutDate: url.searchParams.get('checkOutDate') || tomorrow,
-        numberOfGuests: parseInt(url.searchParams.get('guests') || '2', 10),
+    at.addGrant({
+      roomJoin: true,
+      room: roomName,
+      canPublish: true,
+      canSubscribe: true,
+    });
+
+    const token = await at.toJwt();
+
+    // Proactively dispatch / join LiveKit agent worker to the room
+    liveKitAgentManager.getOrCreateAgent(roomName).catch((err) => {
+      console.error(`[hono] Failed to start LiveKit agent for room ${roomName}:`, err);
+    });
+
+    return c.json({
+      token,
+      url: config.livekit.url,
+      roomName,
+      participantName,
+    });
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Failed to generate token' }, 400);
+  }
+});
+
+// PMS Room Availability Endpoint
+app.get('/api/rooms', async (c) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+
+    const checkInDate = c.req.query('checkInDate') || today;
+    const checkOutDate = c.req.query('checkOutDate') || tomorrow;
+    const guests = parseInt(c.req.query('guests') || '2', 10);
+
+    const rooms = await checkAvailability({
+      checkInDate,
+      checkOutDate,
+      numberOfGuests: guests,
+    });
+
+    return c.json({ rooms });
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Failed to check room availability' }, 500);
+  }
+});
+
+// Historical Telemetry Endpoint
+app.get('/api/telemetry', (c) => {
+  try {
+    const turns = getHistoricalTurnLogs();
+    return c.json({ turns });
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Failed to fetch telemetry' }, 500);
+  }
+});
+
+// Persistent Call Session State Lookup
+app.get('/api/session/:id', async (c) => {
+  const sessionId = c.req.param('id');
+  try {
+    const session = await getCallSession(sessionId);
+    if (!session) {
+      return c.json({ error: 'Session not found or expired', id: sessionId }, 404);
+    }
+    return c.json({ session });
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Failed to load session' }, 500);
+  }
+});
+
+// Update Session State or Create Room Hold
+app.post('/api/session/:id', async (c) => {
+  const sessionId = c.req.param('id');
+  try {
+    const body = await c.req.json().catch(() => ({}));
+
+    if (body.action === 'hold' && body.roomTypeId && body.checkInDate && body.checkOutDate) {
+      const hold = await createRoomHold({
+        sessionId,
+        roomTypeId: body.roomTypeId,
+        checkInDate: body.checkInDate,
+        checkOutDate: body.checkOutDate,
+        guestPhone: body.guestPhone,
       });
-
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ rooms }));
-    } catch (err: any) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message }));
+      return c.json({ success: true, hold });
     }
-    return;
-  }
 
-  if (url.pathname === '/api/telemetry' && req.method === 'GET') {
-    try {
-      const turns = getHistoricalTurnLogs();
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ turns }));
-    } catch (err: any) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message }));
-    }
-    return;
-  }
+    const updated = await saveCallSession({
+      id: sessionId,
+      ...body,
+    });
 
-  res.writeHead(404, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ error: 'Not Found' }));
+    return c.json({ success: true, session: updated });
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Failed to update session' }, 500);
+  }
 });
 
-const wss = new WebSocketServer({ server, path: '/ws/voice' });
+// 404 Fallback
+app.notFound((c) => {
+  return c.json({ error: 'Endpoint Not Found' }, 404);
+});
 
-wss.on('connection', (ws: WebSocket, req) => {
-  console.log(`[ws] client connected from ${req.socket.remoteAddress}`);
+// Server bootstrap
+let serverInstance: any = null;
 
-  const orchestrator = new VoiceOrchestrator();
+const isMain =
+  process.argv[1] &&
+  (process.argv[1].endsWith('src/index.ts') ||
+    process.argv[1].endsWith('src/index.js') ||
+    process.argv[1].endsWith('dist/index.js'));
 
-  orchestrator.on('stateChange', (state) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'state', state }));
+if (isMain && process.env.NODE_ENV !== 'test') {
+  serverInstance = serve(
+    {
+      fetch: app.fetch,
+      port: config.port,
+    },
+    (info) => {
+      console.log(`🚀 Naina Voice Server (Hono) running on http://localhost:${info.port}`);
     }
-  });
+  );
 
-  orchestrator.on('userTranscript', (text, isFinal) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'transcript', role: 'user', text, isFinal }));
-    }
-  });
-
-  orchestrator.on('agentTranscript', (text) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'transcript', role: 'agent', text, isFinal: true }));
-    }
-  });
-
-  orchestrator.on('agentSpeechChunk', (chunk: Uint8Array) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(chunk);
-    }
-  });
-
-  orchestrator.on('bargeIn', () => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'barge_in' }));
-    }
-  });
-
-  orchestrator.on('error', (err) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'error', message: err.message || 'Pipeline error' }));
-    }
-  });
-
-  orchestrator.startSession();
-
-  ws.on('message', async (data, isBinary) => {
-    if (isBinary) {
-      orchestrator.handleIncomingAudio(data as Buffer);
+  // Graceful shutdown
+  const shutdown = () => {
+    console.log('[hono] Gracefully shutting down voice server...');
+    if (serverInstance) {
+      serverInstance.close(() => {
+        console.log('[hono] HTTP server closed.');
+        process.exit(0);
+      });
     } else {
-      try {
-        const msg = JSON.parse(data.toString());
-        if (msg.type === 'text_input' && msg.text) {
-          console.log(`[text_input] ${msg.text}`);
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'transcript', role: 'user', text: msg.text, isFinal: true }));
-          }
-          await orchestrator.handleUserTurn(msg.text);
-        } else if (msg.type === 'interrupt') {
-          console.log('[interrupt] manual client interrupt');
-          orchestrator.interrupt();
-        }
-      } catch (e) {
-        console.error('Failed to parse text message:', e);
-      }
+      process.exit(0);
     }
-  });
+  };
 
-  ws.on('close', () => {
-    console.log('[ws] client disconnected');
-    orchestrator.endSession();
-  });
-
-  ws.on('error', (err) => {
-    console.error('[ws error]', err);
-    orchestrator.endSession();
-  });
-});
-
-server.listen(config.port, () => {
-  console.log(`Naina Voice Server listening on http://localhost:${config.port}`);
-});
-
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}

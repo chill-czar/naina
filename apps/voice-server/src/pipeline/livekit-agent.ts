@@ -14,6 +14,7 @@ import {
 import { AccessToken } from 'livekit-server-sdk';
 import { config } from '../config';
 import { VoiceOrchestrator } from './orchestrator';
+import { getCallSession, saveCallSession } from '@naina/hotel-pms-core';
 
 export class LiveKitVoiceAgent {
   public roomName: string;
@@ -65,8 +66,24 @@ export class LiveKitVoiceAgent {
     await this.room.localParticipant!.publishTrack(this.audioTrack, publishOptions);
     console.log(`[livekit-agent] Published agent audio track to room: ${this.roomName}`);
 
-    // Initialize orchestrator
-    this.orchestrator = new VoiceOrchestrator();
+    // Look up existing call session to seamlessly resume if room/caller reconnected
+    let existingSession = null;
+    try {
+      existingSession = await getCallSession(this.roomName);
+      if (existingSession && existingSession.turnsHistory && existingSession.turnsHistory.length > 0) {
+        console.log(
+          `[livekit-agent] Hydrating existing session for room: ${this.roomName} (${existingSession.turnsHistory.length} turns)`
+        );
+      }
+    } catch (e) {
+      console.warn(`[livekit-agent] Session lookup skipped:`, e);
+    }
+
+    // Initialize orchestrator with hydrated session
+    this.orchestrator = new VoiceOrchestrator({
+      sessionId: this.roomName,
+      initialHistory: existingSession?.turnsHistory,
+    });
 
     this.orchestrator.on('stateChange', (state) => {
       this.broadcastData({ type: 'state', state });
@@ -103,7 +120,7 @@ export class LiveKitVoiceAgent {
       this.broadcastData({ type: 'error', message: err.message || 'Pipeline error' });
     });
 
-    this.orchestrator.startSession();
+    this.orchestrator.startSession(this.roomName);
     this.isActive = true;
 
     // Listen for room events
@@ -129,6 +146,8 @@ export class LiveKitVoiceAgent {
 
           if (data.type === 'barge_in' || data.type === 'interrupt') {
             this.handleBargeIn();
+          } else if (data.type === 'client_speech_end') {
+            this.orchestrator?.handleClientSpeechEndHint(data.timestamp);
           } else if (data.type === 'text_input' && data.text) {
             this.broadcastData({
               type: 'transcript',
@@ -268,6 +287,13 @@ export class LiveKitVoiceAgent {
     if (this.orchestrator) {
       this.orchestrator.endSession();
       this.orchestrator = null;
+    }
+
+    if (this.roomName) {
+      saveCallSession({
+        id: this.roomName,
+        state: 'COMPLETED',
+      }).catch(() => {});
     }
 
     if (this.audioSource) {

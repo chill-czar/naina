@@ -92,6 +92,22 @@ async function testSentenceChunker() {
   assert.strictEqual(streamedChunks[2], 'One moment.');
   console.log('  ✅ Async generator yielded 3 sentences cleanly:', streamedChunks);
 
+  // Test 5: 2-word first-clause fast path
+  console.log('\n5️⃣ Testing 2-word first-clause fast-path splitting...');
+  const chunker5 = new SentenceChunker();
+  const tokenStream5 = ['Sure ', 'thing, ', 'let ', 'me ', 'check ', 'that ', 'right ', 'away.'];
+  const outputSentences5: string[] = [];
+  for (const token of tokenStream5) {
+    const chunk = chunker5.addToken(token);
+    if (chunk) outputSentences5.push(chunk);
+  }
+  const remaining5 = chunker5.flush();
+  if (remaining5) outputSentences5.push(remaining5);
+
+  assert.strictEqual(outputSentences5[0], 'Sure thing,');
+  assert.strictEqual(outputSentences5[1], 'let me check that right away.');
+  console.log('  ✅ 2-word first-clause fast-path emitted immediately:', outputSentences5);
+
   console.log('\n🎉 ALL SENTENCE CHUNKER TESTS PASSED SUCCESSFULLY!\n');
 }
 

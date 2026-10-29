@@ -10,16 +10,20 @@
     "test:tts": "tsx src/test-tts.ts",
     "test:orchestrator": "tsx src/test-orchestrator.ts",
     "test:telemetry": "tsx src/test-telemetry.ts",
+    "test:hono": "NODE_ENV=test tsx src/test-hono-api.ts",
+    "test:session": "NODE_ENV=test tsx src/test-session-persistence.ts",
     "build": "tsc",
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
     "@cartesia/cartesia-js": "^4.2.0",
     "@google/genai": "^2.31.0",
+    "@hono/node-server": "^2.1.5",
     "@livekit/rtc-node": "^1.2.1",
     "@naina/hotel-pms-core": "workspace:*",
     "@naina/shared-types": "workspace:*",
     "dotenv": "^16.4.7",
+    "hono": "^4.13.14",
     "livekit-server-sdk": "^2.9.0",
     "ws": "^8.18.0"
   },

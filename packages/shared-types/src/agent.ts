@@ -49,3 +49,21 @@ export interface LiveKitSessionTokenResponse {
   token: string;
   url: string;
 }
+
+export type CallSessionState = 'ACTIVE' | 'HOLD_PENDING' | 'COMPLETED' | 'DROPPED';
+
+export interface CallSession {
+  id: string;
+  guestPhone?: string;
+  state: CallSessionState;
+  activeHoldId?: string;
+  collectedEntities: Record<string, any>;
+  turnsHistory: Array<{
+    role: 'user' | 'model';
+    parts: Array<any>;
+  }>;
+  turnCount: number;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+}

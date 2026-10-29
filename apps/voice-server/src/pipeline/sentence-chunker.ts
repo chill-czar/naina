@@ -7,6 +7,7 @@
 export class SentenceChunker {
   private buffer = '';
   private minWordsForCommaSplit: number;
+  private isFirstChunk = true;
 
   constructor(options?: { minWordsForCommaSplit?: number }) {
     this.minWordsForCommaSplit = options?.minWordsForCommaSplit ?? 3;
@@ -29,18 +30,22 @@ export class SentenceChunker {
       // Avoid splitting on common abbreviations: Mr., Ms., Dr., etc.
       if (!candidate.match(/\b(Mr|Mrs|Ms|Dr|vs|etc)\.$/i)) {
         this.buffer = this.buffer.slice(matchEnd);
+        this.isFirstChunk = false;
         return candidate;
       }
     }
 
-    // Check for comma or colon/semicolon clause boundary if enough words exist
+    // Check for comma or colon/semicolon clause boundary.
+    // For the very first chunk of a turn, allow splitting on 2 words so TTS begins synthesizing immediately!
+    const effectiveMinWords = this.isFirstChunk ? Math.min(2, this.minWordsForCommaSplit) : this.minWordsForCommaSplit;
     const words = this.buffer.trim().split(/\s+/);
-    if (words.length >= this.minWordsForCommaSplit) {
+    if (words.length >= effectiveMinWords) {
       const clauseMatch = this.buffer.match(/([,;:]+)\s+/);
       if (clauseMatch && clauseMatch.index !== undefined) {
         const matchEnd = clauseMatch.index + clauseMatch[0].length;
         const candidate = this.buffer.slice(0, matchEnd).trim();
         this.buffer = this.buffer.slice(matchEnd);
+        this.isFirstChunk = false;
         return candidate;
       }
     }
@@ -54,6 +59,7 @@ export class SentenceChunker {
   public flush(): string | null {
     const remaining = this.buffer.trim();
     this.buffer = '';
+    this.isFirstChunk = true;
     return remaining.length > 0 ? remaining : null;
   }
 

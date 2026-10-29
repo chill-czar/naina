@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "naina-session-coordinator",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-10-22",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CALL_SESSIONS",
+        "class_name": "CallSessionDurableObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["CallSessionDurableObject"]
+    }
+  ]
+}

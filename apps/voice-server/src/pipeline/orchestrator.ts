@@ -4,6 +4,7 @@ import { createSTTStream, synthesizeSpeechStream } from './cartesia-bridge';
 import { SentenceChunker } from './sentence-chunker';
 import type { AgentState, ServerTurnMetricsPacket } from '@naina/shared-types';
 import { appendTurnLog, getNextTurnNumber } from './telemetry-logger';
+import { saveCallSession } from '@naina/hotel-pms-core';
 
 class AsyncTokenQueue implements AsyncIterable<string> {
   private queue: string[] = [];
@@ -57,11 +58,26 @@ export class VoiceOrchestrator extends EventEmitter {
   private currentTurnStartTime = 0;
   private lastSpeechActivityTime = 0;
   private lastSttDurationMs = 0;
+  private lastClientSpeechEndTime = 0;
+  private pendingHesitationTimer: NodeJS.Timeout | null = null;
   private currentAbortController: AbortController | null = null;
 
-  constructor() {
+  constructor(options?: { sessionId?: string; initialHistory?: any[] }) {
     super();
-    this.agent = new NainaAgent();
+    this.sessionPrefix = options?.sessionId || Date.now().toString(36).slice(-4);
+    this.agent = new NainaAgent(options?.initialHistory);
+  }
+
+  public handleClientSpeechEndHint(timestamp?: number): void {
+    this.lastClientSpeechEndTime = timestamp || performance.now();
+  }
+
+  public getSessionId(): string {
+    return this.sessionPrefix;
+  }
+
+  public async getSessionHistory(): Promise<any[]> {
+    return await this.agent.getHistory();
   }
 
   private setState(newState: AgentState) {
@@ -72,10 +88,14 @@ export class VoiceOrchestrator extends EventEmitter {
     }
   }
 
-  public startSession() {
+  public startSession(sessionId?: string) {
     this.setState('LISTENING');
     this.sttHasError = false;
-    this.sessionPrefix = Date.now().toString(36).slice(-4);
+    if (sessionId) {
+      this.sessionPrefix = sessionId;
+    } else if (!this.sessionPrefix) {
+      this.sessionPrefix = Date.now().toString(36).slice(-4);
+    }
     this.turnCounter = 0;
     this.activeTurnNumber = 0;
     this.sttStream = createSTTStream(16000);
@@ -83,6 +103,10 @@ export class VoiceOrchestrator extends EventEmitter {
     this.sttStream.on('turn.start', () => {
       this.currentTurnStartTime = performance.now();
       this.lastSpeechActivityTime = performance.now();
+      if (this.pendingHesitationTimer) {
+        clearTimeout(this.pendingHesitationTimer);
+        this.pendingHesitationTimer = null;
+      }
       // Only interrupt if agent is actively SPEAKING; never interrupt during THINKING!
       if (this.state === 'SPEAKING') {
         this.interrupt();
@@ -91,6 +115,10 @@ export class VoiceOrchestrator extends EventEmitter {
 
     this.sttStream.on('turn.update', (event: any) => {
       this.lastSpeechActivityTime = performance.now();
+      if (this.pendingHesitationTimer) {
+        clearTimeout(this.pendingHesitationTimer);
+        this.pendingHesitationTimer = null;
+      }
       if (event.transcript) {
         this.emit('userTranscript', event.transcript, false);
       }
@@ -102,8 +130,29 @@ export class VoiceOrchestrator extends EventEmitter {
 
       const tSttEnd = performance.now();
       const rawFinalizeDelay = Math.round(tSttEnd - this.lastSpeechActivityTime);
-      // Realistic STT finalization delay (endpointing to final transcript delivery)
-      this.lastSttDurationMs = Math.min(350, Math.max(90, rawFinalizeDelay));
+      this.lastSttDurationMs = Math.max(30, rawFinalizeDelay);
+
+      // Lexical hesitation guard: If transcript ends on an open conjunction or filler
+      // without terminal punctuation, hold 300ms for speech continuation before triggering LLM
+      const TRAILING_HESITATIONS = new Set(['uh', 'um', 'wait', 'and', 'or', 'so', 'for', 'the', 'my', 'to', 'a']);
+      const cleanWords = finalTranscript.toLowerCase().replace(/[^\w\s]/g, '').trim().split(/\s+/);
+      const lastWord = cleanWords[cleanWords.length - 1];
+
+      if (TRAILING_HESITATIONS.has(lastWord) && cleanWords.length <= 4) {
+        console.log(`[orchestrator] Hesitation word "${lastWord}" detected. Buffering 300ms for continuation...`);
+        if (this.pendingHesitationTimer) clearTimeout(this.pendingHesitationTimer);
+        this.pendingHesitationTimer = setTimeout(async () => {
+          this.pendingHesitationTimer = null;
+          this.emit('userTranscript', finalTranscript, true);
+          await this.handleUserTurn(finalTranscript);
+        }, 300);
+        return;
+      }
+
+      if (this.pendingHesitationTimer) {
+        clearTimeout(this.pendingHesitationTimer);
+        this.pendingHesitationTimer = null;
+      }
 
       const speechUtteranceMs = Math.max(0, Math.round(this.lastSpeechActivityTime - this.currentTurnStartTime));
       console.log(
@@ -145,6 +194,10 @@ export class VoiceOrchestrator extends EventEmitter {
 
   public interrupt(): void {
     this.isInterrupted = true;
+    if (this.pendingHesitationTimer) {
+      clearTimeout(this.pendingHesitationTimer);
+      this.pendingHesitationTimer = null;
+    }
     if (this.currentAbortController) {
       try {
         this.currentAbortController.abort();
@@ -238,7 +291,7 @@ export class VoiceOrchestrator extends EventEmitter {
     })();
     this.activeAgentPromise = agentPumpPromise;
 
-    const chunker = new SentenceChunker({ minWordsForCommaSplit: 4 });
+    const chunker = new SentenceChunker({ minWordsForCommaSplit: 2 });
     let firstTtsChunkEmitted = false;
     let tTtsStart = 0;
 
@@ -266,7 +319,7 @@ export class VoiceOrchestrator extends EventEmitter {
             const ttsTtfbMs = Math.round(performance.now() - tTtsStart);
             const llmTtftMs = tLlmToken1 > 0 ? Math.round(tLlmToken1 - tTurnStart - totalToolDurationMs) : 280;
 
-            const metricsPacket: ServerTurnMetricsPacket = {
+            const initialMetricsPacket: ServerTurnMetricsPacket = {
               type: 'turn_telemetry',
               turnId,
               sttLatencyMs: this.lastSttDurationMs,
@@ -277,25 +330,63 @@ export class VoiceOrchestrator extends EventEmitter {
               ttsTtfbMs: Math.max(0, ttsTtfbMs),
             };
 
-            this.emit('turnMetrics', metricsPacket, toolCalls);
-
-            appendTurnLog({
-              turnId,
-              sessionId: this.sessionPrefix,
-              timestamp: new Date().toISOString(),
-              userTranscript: transcript,
-              agentTranscript: fullAgentTranscript || sentence,
-              toolCalls,
-              metrics: metricsPacket,
-            });
+            this.emit('turnMetrics', initialMetricsPacket, toolCalls);
           }
 
           this.emit('agentSpeechChunk', audioChunk);
         }
       }
 
-      if (fullAgentTranscript && this.activeTurnNumber === currentTurn && !abortSignal.aborted) {
-        this.emit('agentTranscript', fullAgentTranscript);
+      if (this.activeAgentPromise) {
+        try {
+          await this.activeAgentPromise;
+        } catch {}
+      }
+
+      if (this.activeTurnNumber === currentTurn && !abortSignal.aborted) {
+        if (fullAgentTranscript) {
+          this.emit('agentTranscript', fullAgentTranscript);
+        }
+
+        // Finalize turn telemetry record with 100% of tool executions and complete response
+        const completedMetricsPacket: ServerTurnMetricsPacket = {
+          type: 'turn_telemetry',
+          turnId,
+          sttLatencyMs: this.lastSttDurationMs,
+          toolExecutionMs: totalToolDurationMs,
+          toolName: toolCalls.length > 0 ? toolCalls[0].name : undefined,
+          llmTtftMs: Math.max(0, tLlmToken1 > 0 ? Math.round(tLlmToken1 - tTurnStart - totalToolDurationMs) : 280),
+          llmTotalMs: Math.round(performance.now() - tTurnStart),
+          ttsTtfbMs: Math.max(0, tTtsStart > 0 ? Math.round(performance.now() - tTtsStart) : 150),
+        };
+
+        appendTurnLog({
+          turnId,
+          sessionId: this.sessionPrefix,
+          timestamp: new Date().toISOString(),
+          userTranscript: transcript,
+          agentTranscript: fullAgentTranscript,
+          toolCalls,
+          metrics: completedMetricsPacket,
+        });
+
+        if (toolCalls.length > 0) {
+          this.emit('turnMetrics', completedMetricsPacket, toolCalls);
+        }
+      }
+
+      // Persist dialogue state to call session storage for seamless reconnection
+      if (this.sessionPrefix) {
+        this.agent.getHistory().then((history) => {
+          return saveCallSession({
+            id: this.sessionPrefix,
+            turnsHistory: history,
+            turnCount: this.turnCounter,
+            state: 'ACTIVE',
+          });
+        }).catch((err) => {
+          console.warn('[orchestrator] Note: Session persist skipped:', err?.message);
+        });
       }
     } catch (err) {
       if (this.activeTurnNumber === currentTurn) {
@@ -311,6 +402,10 @@ export class VoiceOrchestrator extends EventEmitter {
 
   public endSession() {
     this.setState('IDLE');
+    if (this.pendingHesitationTimer) {
+      clearTimeout(this.pendingHesitationTimer);
+      this.pendingHesitationTimer = null;
+    }
     if (this.currentAbortController) {
       try {
         this.currentAbortController.abort();

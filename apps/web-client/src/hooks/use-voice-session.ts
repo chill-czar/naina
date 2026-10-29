@@ -247,12 +247,20 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
       }
     },
     onSpeechEnd: (_audio, timestamp) => {
-      // ONLY update speech-end timestamp when agent is LISTENING or IDLE.
-      // NEVER allow background noises/breaths during THINKING or SPEAKING to corrupt turn start!
       if (agentStateRef.current === 'LISTENING' || agentStateRef.current === 'IDLE') {
         lastSpeechEndTimestampRef.current = timestamp;
         hasRecordedPlayoutForCurrentTurnRef.current = false;
         pendingServerMetricsRef.current = null;
+
+        // Proactively transmit instant speech-end hint to voice server over WebRTC DataChannel
+        if (roomRef.current?.localParticipant) {
+          try {
+            const payload = new TextEncoder().encode(
+              JSON.stringify({ type: 'client_speech_end', timestamp })
+            );
+            roomRef.current.localParticipant.publishData(payload, { reliable: true }).catch(() => {});
+          } catch {}
+        }
       }
     },
   });
